@@ -51,12 +51,38 @@ def _load_env():
 
 
 def get_telegram_config() -> tuple[Optional[str], Optional[str]]:
-    """Return (bot_token, chat_id) from env, or (None, None) if not configured."""
+    """Return (bot_token, chat_id) from env vars, .env file, or Azure Key Vault.
+
+    Lookup order:
+      1. Environment variables / .env file (TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID)
+      2. Azure Key Vault (using AZURE_KEYVAULT_URL + secret names)
+
+    Returns (None, None) if neither source is configured.
+    """
     _load_env()
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
     chat_id = os.environ.get("TELEGRAM_CHAT_ID")
+
     if token and chat_id:
         return token, chat_id
+
+    # Try Azure Key Vault
+    vault_url = os.environ.get("AZURE_KEYVAULT_URL")
+    if vault_url:
+        try:
+            from azure.identity import DefaultAzureCredential
+            from azure.keyvault.secrets import SecretClient
+            credential = DefaultAzureCredential()
+            client = SecretClient(vault_url=vault_url, credential=credential)
+            token_secret = os.environ.get("TELEGRAM_TOKEN_SECRET", "Telegram-NennerBot")
+            chat_secret = os.environ.get("TELEGRAM_CHATID_SECRET", "telegram-chat-id")
+            token = client.get_secret(token_secret).value
+            chat_id = client.get_secret(chat_secret).value
+            if token and chat_id:
+                return token, chat_id
+        except Exception as e:
+            log.error(f"Azure Key Vault error (Telegram): {e}")
+
     return None, None
 
 
