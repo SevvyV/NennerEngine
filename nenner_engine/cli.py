@@ -14,6 +14,7 @@ from .imap_client import backfill_imap, check_new_emails, import_eml_folder
 from .reporting import show_status, show_history, export_csv
 from .prices import fetch_yfinance_daily, get_prices_with_signal_context
 from .alerts import run_monitor, show_alert_history
+from .auto_cancel import check_auto_cancellations
 from .positions import read_positions, get_positions_with_signal_context
 
 
@@ -173,6 +174,8 @@ Examples:
                         help="Show recent alerts from alert_log")
     parser.add_argument("--positions", action="store_true",
                         help="Show trade positions with dollar P/L")
+    parser.add_argument("--auto-cancel", action="store_true",
+                        help="Check daily closes against cancel levels and auto-cancel breached signals")
     parser.add_argument("--db", type=str, default=default_db,
                         help=f"Database path (default: {default_db})")
 
@@ -182,7 +185,18 @@ Examples:
     conn = init_db(args.db)
     migrate_db(conn)
 
-    if args.positions:
+    if args.auto_cancel:
+        results = check_auto_cancellations(conn)
+        if results:
+            print(f"\nAuto-cancelled {len(results)} signal(s):")
+            for r in results:
+                print(f"  {r['ticker']} ({r['instrument']}): "
+                      f"{r['old_signal']} -> {r['new_signal']} "
+                      f"(close={r['close_price']:.2f}, "
+                      f"cancel={r['cancel_level']:.2f})")
+        else:
+            print("No cancel levels breached today.")
+    elif args.positions:
         _show_positions(conn)
     elif args.monitor:
         run_monitor(conn, interval=args.interval)

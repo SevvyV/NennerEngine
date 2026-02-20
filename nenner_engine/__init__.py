@@ -82,14 +82,25 @@ from .alerts import (
     PROXIMITY_WARNING_PCT,
     ALERT_COOLDOWN_MINUTES,
 )
+from .llm_parser import (
+    parse_email_signals_llm,
+    get_anthropic_api_key,
+)
+from .auto_cancel import (
+    check_auto_cancellations,
+)
 
 __all__ = [
     # Instruments
     "INSTRUMENT_MAP", "identify_instrument", "get_section_instrument",
-    # Parser
+    # Parser (legacy regex — kept for reference)
     "RE_ACTIVE", "RE_CANCELLED", "RE_TRIGGER", "RE_TARGET", "RE_CYCLE",
     "RE_NOTE_CHANGE", "parse_price", "parse_email_signals", "classify_email",
     "extract_text_from_email",
+    # LLM Parser (primary)
+    "parse_email_signals_llm", "get_anthropic_api_key",
+    # Auto-Cancel
+    "check_auto_cancellations",
     # Database
     "init_db", "migrate_db", "compute_current_state",
     "store_email", "store_parsed_results",
