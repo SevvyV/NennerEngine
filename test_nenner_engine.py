@@ -21,6 +21,15 @@ from nenner_engine import (
     parse_email_signals, init_db, migrate_db, compute_current_state,
     store_parsed_results, classify_email,
 )
+from nenner_engine.alerts import (
+    evaluate_price_alerts,
+    detect_signal_changes,
+    is_cooled_down,
+    log_alert,
+    show_alert_history,
+    PROXIMITY_DANGER_PCT,
+    PROXIMITY_WARNING_PCT,
+)
 
 
 class TestParsePrice(unittest.TestCase):
@@ -656,6 +665,163 @@ class TestLiveDatabaseValidation(unittest.TestCase):
         signal_count = self.conn.execute("SELECT COUNT(*) FROM signals").fetchone()[0]
         self.assertGreater(email_count, 2000)
         self.assertGreater(signal_count, 10000)
+
+
+class TestAlertEngine(unittest.TestCase):
+    """Test alert condition evaluation, cooldown, and persistence."""
+
+    def setUp(self):
+        self.conn = init_db(":memory:")
+        migrate_db(self.conn)
+
+    def tearDown(self):
+        self.conn.close()
+
+    def _make_row(self, ticker="GC", instrument="Gold", price=5000.0,
+                  cancel_dist_pct=None, trigger_dist_pct=None,
+                  effective_signal="BUY", cancel_level=None,
+                  trigger_level=None, origin_price=None):
+        return {
+            "ticker": ticker, "instrument": instrument,
+            "price": price, "effective_signal": effective_signal,
+            "cancel_dist_pct": cancel_dist_pct,
+            "trigger_dist_pct": trigger_dist_pct,
+            "cancel_level": cancel_level,
+            "trigger_level": trigger_level,
+            "origin_price": origin_price,
+        }
+
+    def test_cancel_danger_alert(self):
+        """Cancel distance below DANGER threshold fires CANCEL_DANGER."""
+        rows = [self._make_row(cancel_dist_pct=0.3, cancel_level=5015)]
+        alerts = evaluate_price_alerts(rows)
+        self.assertEqual(len(alerts), 1)
+        self.assertEqual(alerts[0]["alert_type"], "CANCEL_DANGER")
+        self.assertEqual(alerts[0]["severity"], "DANGER")
+        self.assertEqual(alerts[0]["ticker"], "GC")
+
+    def test_cancel_watch_alert(self):
+        """Cancel distance between DANGER and WARNING fires CANCEL_WATCH."""
+        rows = [self._make_row(cancel_dist_pct=0.7, cancel_level=5035)]
+        alerts = evaluate_price_alerts(rows)
+        cancel_alerts = [a for a in alerts if a["alert_type"] == "CANCEL_WATCH"]
+        self.assertEqual(len(cancel_alerts), 1)
+        self.assertEqual(cancel_alerts[0]["severity"], "WARNING")
+
+    def test_cancel_no_alert_far(self):
+        """Cancel distance above WARNING threshold produces no cancel alert."""
+        rows = [self._make_row(cancel_dist_pct=3.0, cancel_level=5150)]
+        alerts = evaluate_price_alerts(rows)
+        cancel_alerts = [a for a in alerts if "CANCEL" in a["alert_type"]]
+        self.assertEqual(len(cancel_alerts), 0)
+
+    def test_trigger_danger_alert(self):
+        """Trigger distance below DANGER threshold fires TRIGGER_DANGER."""
+        rows = [self._make_row(trigger_dist_pct=0.2, trigger_level=5010)]
+        alerts = evaluate_price_alerts(rows)
+        trigger_alerts = [a for a in alerts if a["alert_type"] == "TRIGGER_DANGER"]
+        self.assertEqual(len(trigger_alerts), 1)
+        self.assertEqual(trigger_alerts[0]["severity"], "DANGER")
+
+    def test_trigger_watch_alert(self):
+        """Trigger distance between DANGER and WARNING fires TRIGGER_WATCH."""
+        rows = [self._make_row(trigger_dist_pct=0.8, trigger_level=5040)]
+        alerts = evaluate_price_alerts(rows)
+        trigger_alerts = [a for a in alerts if a["alert_type"] == "TRIGGER_WATCH"]
+        self.assertEqual(len(trigger_alerts), 1)
+
+    def test_no_price_skipped(self):
+        """Rows with price=None produce no alerts."""
+        rows = [self._make_row(price=None, cancel_dist_pct=0.1)]
+        alerts = evaluate_price_alerts(rows)
+        self.assertEqual(len(alerts), 0)
+
+    def test_multiple_alerts_same_row(self):
+        """Row near both cancel and trigger produces two alerts."""
+        rows = [self._make_row(
+            cancel_dist_pct=0.3, cancel_level=5015,
+            trigger_dist_pct=0.4, trigger_level=5020,
+        )]
+        alerts = evaluate_price_alerts(rows)
+        types = {a["alert_type"] for a in alerts}
+        self.assertIn("CANCEL_DANGER", types)
+        self.assertIn("TRIGGER_DANGER", types)
+        self.assertEqual(len(alerts), 2)
+
+    def test_signal_change_detection(self):
+        """New signals after baseline id should be detected."""
+        self.conn.execute(
+            "INSERT INTO emails (message_id, subject, date_sent, date_parsed, "
+            "email_type, raw_text) "
+            "VALUES ('test-1', 'Test', '2026-02-18', datetime('now'), "
+            "'morning_update', 'test')"
+        )
+        self.conn.commit()
+        baseline_id = 0
+
+        self.conn.execute(
+            "INSERT INTO signals (email_id, date, instrument, ticker, "
+            "asset_class, signal_type, signal_status, origin_price, "
+            "cancel_direction, cancel_level, note_the_change, "
+            "uses_hourly_close, raw_text) "
+            "VALUES (1, '2026-02-18', 'Gold', 'GC', 'Precious Metals', "
+            "'BUY', 'ACTIVE', 5000.0, 'BELOW', 4950.0, 0, 0, 'test')"
+        )
+        self.conn.commit()
+
+        alerts, new_max_id = detect_signal_changes(self.conn, baseline_id)
+        self.assertEqual(len(alerts), 1)
+        self.assertEqual(alerts[0]["ticker"], "GC")
+        self.assertEqual(alerts[0]["alert_type"], "SIGNAL_CHANGE")
+        self.assertGreater(new_max_id, baseline_id)
+
+        # Second call with new max_id should find nothing
+        alerts2, same_id = detect_signal_changes(self.conn, new_max_id)
+        self.assertEqual(len(alerts2), 0)
+        self.assertEqual(same_id, new_max_id)
+
+    def test_cooldown_blocks_repeat(self):
+        """Alert within cooldown period should be suppressed."""
+        from datetime import datetime
+        tracker = {("GC", "CANCEL_DANGER"): datetime.now()}
+        self.assertFalse(is_cooled_down(tracker, "GC", "CANCEL_DANGER"))
+
+    def test_cooldown_expires(self):
+        """Alert after cooldown period should fire."""
+        from datetime import datetime, timedelta
+        tracker = {("GC", "CANCEL_DANGER"): datetime.now() - timedelta(minutes=61)}
+        self.assertTrue(is_cooled_down(tracker, "GC", "CANCEL_DANGER"))
+
+    def test_cooldown_first_time(self):
+        """First alert for a ticker/type should always fire."""
+        self.assertTrue(is_cooled_down({}, "GC", "CANCEL_DANGER"))
+
+    def test_alert_log_persistence(self):
+        """log_alert writes to DB and can be retrieved."""
+        alert = {
+            "ticker": "GC", "instrument": "Gold",
+            "alert_type": "CANCEL_DANGER", "severity": "DANGER",
+            "message": "Test alert", "current_price": 5000.0,
+            "cancel_dist_pct": 0.3, "trigger_dist_pct": None,
+            "effective_signal": "BUY",
+        }
+        log_alert(self.conn, alert, ["toast", "telegram"])
+
+        rows = self.conn.execute(
+            "SELECT * FROM alert_log WHERE ticker = 'GC'"
+        ).fetchall()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["alert_type"], "CANCEL_DANGER")
+        self.assertEqual(rows[0]["channels_sent"], "toast,telegram")
+
+    def test_show_alert_history_empty(self):
+        """show_alert_history on empty DB prints 'No alerts' message."""
+        import io
+        from contextlib import redirect_stdout
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            show_alert_history(self.conn)
+        self.assertIn("No alerts recorded yet", buf.getvalue())
 
 
 if __name__ == "__main__":

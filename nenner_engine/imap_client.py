@@ -56,7 +56,7 @@ def get_credentials() -> tuple[str, str]:
             credential = DefaultAzureCredential()
             client = SecretClient(vault_url=vault_url, credential=credential)
             addr_secret = os.environ.get("GMAIL_ADDRESS_SECRET", "gmail-address")
-            pass_secret = os.environ.get("GMAIL_PASSWORD_SECRET", "gmail-app-password")
+            pass_secret = os.environ.get("GMAIL_PASSWORD_SECRET", "GmailAppPassword4Nennerbot")
             gmail_addr = client.get_secret(addr_secret).value
             gmail_pass = client.get_secret(pass_secret).value
             return gmail_addr, gmail_pass
