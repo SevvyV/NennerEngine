@@ -13,7 +13,8 @@ from email.parser import BytesParser
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from .parser import classify_email, extract_text_from_email, parse_email_signals
+from .parser import classify_email, extract_text_from_email
+from .llm_parser import parse_email_signals_llm
 from .db import store_email, store_parsed_results
 
 log = logging.getLogger("nenner")
@@ -159,8 +160,8 @@ def process_email(conn, msg, source_id: str = None) -> bool:
     if email_id is None:
         return False  # Duplicate
 
-    # Parse signals
-    results = parse_email_signals(body, email_date, email_id)
+    # Parse signals via LLM
+    results = parse_email_signals_llm(body, email_date, email_id)
 
     # Store results
     store_parsed_results(conn, results, email_id)

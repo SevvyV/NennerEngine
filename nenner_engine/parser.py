@@ -1,9 +1,15 @@
 """
-Signal Parser
-==============
+Signal Parser (Legacy)
+=======================
 Regex-based extraction of Nenner signal grammar from email bodies.
 Handles active signals, cancelled signals, price targets, cycle
 directions, and email classification.
+
+NOTE: The regex-based parse_email_signals() is superseded by
+llm_parser.parse_email_signals_llm() which uses Claude Haiku for
+natural language understanding. The regex patterns and parse_email_signals()
+are kept for reference and testing. classify_email() and
+extract_text_from_email() are still actively used by the pipeline.
 """
 
 import re

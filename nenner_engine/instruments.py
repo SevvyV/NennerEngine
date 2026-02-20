@@ -209,3 +209,12 @@ def get_section_instrument(text_before: str) -> tuple[str, str, str]:
                 best_result = (name, ticker, asset_class)
 
     return best_result
+
+
+def get_instrument_map_json() -> str:
+    """Return INSTRUMENT_MAP as a JSON string for LLM context."""
+    import json
+    simplified = {}
+    for name, info in INSTRUMENT_MAP.items():
+        simplified[name] = {"ticker": info["ticker"], "asset_class": info["asset_class"]}
+    return json.dumps(simplified, indent=2)

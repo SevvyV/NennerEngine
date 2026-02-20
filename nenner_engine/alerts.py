@@ -468,11 +468,43 @@ def run_monitor(conn: sqlite3.Connection, interval: int = 60):
 
     check_count = 0
     total_alerts = 0
+    auto_cancel_ran_today = None  # Track date of last auto-cancel run
 
     while not shutdown:
         try:
             check_count += 1
             log.info(f"--- Alert check #{check_count} ---")
+
+            # 0. Auto-cancel check at 4:30 PM ET (once per day)
+            try:
+                from zoneinfo import ZoneInfo
+                from .auto_cancel import check_auto_cancellations
+                now_et = datetime.now(ZoneInfo("US/Eastern"))
+                today_str = now_et.strftime("%Y-%m-%d")
+                if (now_et.hour >= 16 and now_et.minute >= 30
+                        and auto_cancel_ran_today != today_str):
+                    log.info("Running daily auto-cancel check (4:30 PM ET)...")
+                    cancellations = check_auto_cancellations(conn)
+                    auto_cancel_ran_today = today_str
+                    for c in cancellations:
+                        auto_alert = _make_alert(
+                            {"ticker": c["ticker"],
+                             "instrument": c["instrument"],
+                             "price": c["close_price"],
+                             "cancel_dist_pct": None,
+                             "trigger_dist_pct": None,
+                             "effective_signal": c["new_signal"]},
+                            "AUTO_CANCEL", "DANGER",
+                            f"AUTO-CANCEL {c['ticker']} ({c['instrument']}): "
+                            f"{c['old_signal']} cancelled at {c['close_price']:.2f} "
+                            f"(cancel {c['cancel_level']:.2f}). "
+                            f"Now {c['new_signal']}."
+                        )
+                        dispatch_alert(auto_alert, cooldown_tracker, conn,
+                                       tg_token, tg_chat_id)
+                        total_alerts += 1
+            except Exception as e:
+                log.error(f"Auto-cancel check failed: {e}", exc_info=True)
 
             # 1. Price-based alerts (cancel/trigger proximity)
             rows = get_prices_with_signal_context(conn, try_t1=True)

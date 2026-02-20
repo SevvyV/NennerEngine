@@ -1085,5 +1085,420 @@ class TestPositionSignalContext(unittest.TestCase):
         self.conn.close()
 
 
+# ---------------------------------------------------------------------------
+# LLM Parser Tests (mocked API)
+# ---------------------------------------------------------------------------
+
+from unittest.mock import patch, MagicMock
+from nenner_engine.llm_parser import (
+    parse_email_signals_llm,
+    _validate_signal,
+    _validate_cycle,
+    _validate_target,
+    _apply_crypto_fix,
+    _validate_ticker,
+)
+
+
+class TestLLMParserValidation(unittest.TestCase):
+    """Test LLM parser validation and post-processing (no API calls)."""
+
+    def test_validate_signal_complete(self):
+        sig = {
+            "instrument": "Gold",
+            "ticker": "GC",
+            "asset_class": "Precious Metals",
+            "signal_type": "BUY",
+            "signal_status": "ACTIVE",
+            "origin_price": 2900.0,
+            "cancel_direction": "BELOW",
+            "cancel_level": 2850.0,
+            "trigger_direction": None,
+            "trigger_level": None,
+            "price_target": None,
+            "target_direction": None,
+            "note_the_change": 0,
+            "uses_hourly_close": 0,
+            "raw_text": "Continues on a buy signal from 2900",
+        }
+        result = _validate_signal(sig)
+        self.assertEqual(result["signal_type"], "BUY")
+        self.assertEqual(result["origin_price"], 2900.0)
+        self.assertEqual(result["cancel_level"], 2850.0)
+        self.assertEqual(result["note_the_change"], 0)
+
+    def test_validate_signal_missing_fields(self):
+        """Missing fields get defaults."""
+        sig = {"instrument": "Gold", "ticker": "GC", "signal_type": "sell"}
+        result = _validate_signal(sig)
+        self.assertEqual(result["signal_type"], "SELL")
+        self.assertEqual(result["signal_status"], "ACTIVE")
+        self.assertIsNone(result["origin_price"])
+        self.assertEqual(result["note_the_change"], 0)
+
+    def test_validate_signal_type_normalization(self):
+        sig = {"signal_type": "buy", "signal_status": "active"}
+        result = _validate_signal(sig)
+        self.assertEqual(result["signal_type"], "BUY")
+        self.assertEqual(result["signal_status"], "ACTIVE")
+
+    def test_validate_cycle(self):
+        cyc = {
+            "instrument": "Gold",
+            "ticker": "GC",
+            "timeframe": "weekly",
+            "direction": "up",
+            "until_description": "next week",
+            "raw_text": "The weekly cycle is up until next week",
+        }
+        result = _validate_cycle(cyc)
+        self.assertEqual(result["direction"], "UP")
+        self.assertEqual(result["timeframe"], "weekly")
+
+    def test_validate_target(self):
+        tgt = {
+            "instrument": "Tesla",
+            "ticker": "TSLA",
+            "target_price": 375.0,
+            "direction": "downside",
+            "condition": "stays on sell signal",
+            "raw_text": "There is still a downside price target at 375",
+        }
+        result = _validate_target(tgt)
+        self.assertEqual(result["direction"], "DOWNSIDE")
+        self.assertEqual(result["target_price"], 375.0)
+
+    def test_crypto_fix_gbtc_to_btc(self):
+        signals = [{"ticker": "GBTC", "instrument": "GBTC",
+                     "asset_class": "Crypto ETF", "origin_price": 95000.0}]
+        _apply_crypto_fix(signals)
+        self.assertEqual(signals[0]["ticker"], "BTC")
+        self.assertEqual(signals[0]["instrument"], "Bitcoin")
+
+    def test_crypto_fix_ethe_to_eth(self):
+        signals = [{"ticker": "ETHE", "instrument": "ETHE",
+                     "asset_class": "Crypto ETF", "origin_price": 3500.0}]
+        _apply_crypto_fix(signals)
+        self.assertEqual(signals[0]["ticker"], "ETH")
+
+    def test_crypto_fix_no_change_low_price(self):
+        signals = [{"ticker": "GBTC", "instrument": "GBTC",
+                     "asset_class": "Crypto ETF", "origin_price": 50.0}]
+        _apply_crypto_fix(signals)
+        self.assertEqual(signals[0]["ticker"], "GBTC")
+
+    def test_validate_ticker_known(self):
+        self.assertTrue(_validate_ticker({"ticker": "GC"}))
+        self.assertTrue(_validate_ticker({"ticker": "TSLA"}))
+        self.assertTrue(_validate_ticker({"ticker": "BTC"}))
+
+    def test_validate_ticker_unknown(self):
+        self.assertFalse(_validate_ticker({"ticker": "FAKE"}))
+        self.assertFalse(_validate_ticker({"ticker": "UNK"}))
+
+
+class TestLLMParserMocked(unittest.TestCase):
+    """Test LLM parser with mocked _call_llm (bypasses Anthropic API entirely)."""
+
+    @patch("nenner_engine.llm_parser._call_llm")
+    def test_gold_active_buy(self, mock_call):
+        mock_call.return_value = {
+            "signals": [{
+                "instrument": "Gold",
+                "ticker": "GC",
+                "asset_class": "Precious Metals",
+                "signal_type": "BUY",
+                "signal_status": "ACTIVE",
+                "origin_price": 2900.0,
+                "cancel_direction": "BELOW",
+                "cancel_level": 2850.0,
+                "trigger_direction": None,
+                "trigger_level": None,
+                "price_target": None,
+                "target_direction": None,
+                "note_the_change": 0,
+                "uses_hourly_close": 0,
+                "raw_text": "Continues on a buy signal from 2900"
+            }],
+            "cycles": [],
+            "price_targets": [],
+        }
+
+        result = parse_email_signals_llm("Continues on a buy signal from 2900 as long as there is no close below 2850. Test email body.",
+                                          "2026-02-18", 1, api_key="test-key")
+        self.assertEqual(len(result["signals"]), 1)
+        sig = result["signals"][0]
+        self.assertEqual(sig["signal_type"], "BUY")
+        self.assertEqual(sig["ticker"], "GC")
+        self.assertEqual(sig["email_id"], 1)
+        self.assertEqual(sig["date"], "2026-02-18")
+
+    @patch("nenner_engine.llm_parser._call_llm")
+    def test_cancelled_with_trigger(self, mock_call):
+        mock_call.return_value = {
+            "signals": [{
+                "instrument": "S&P",
+                "ticker": "ES",
+                "asset_class": "Equity Index",
+                "signal_type": "BUY",
+                "signal_status": "CANCELLED",
+                "origin_price": 6000.0,
+                "cancel_direction": "BELOW",
+                "cancel_level": 5950.0,
+                "trigger_direction": "ABOVE",
+                "trigger_level": 6050.0,
+                "price_target": None,
+                "target_direction": None,
+                "note_the_change": 0,
+                "uses_hourly_close": 0,
+                "raw_text": "Cancelled the buy signal"
+            }],
+            "cycles": [],
+            "price_targets": [],
+        }
+
+        result = parse_email_signals_llm("Continues on a buy signal from 2900 as long as there is no close below 2850. Test email body.",
+                                          "2026-02-18", 2, api_key="test-key")
+        sig = result["signals"][0]
+        self.assertEqual(sig["signal_status"], "CANCELLED")
+        self.assertEqual(sig["trigger_direction"], "ABOVE")
+        self.assertEqual(sig["trigger_level"], 6050.0)
+
+    @patch("nenner_engine.llm_parser._call_llm")
+    def test_multiple_instruments(self, mock_call):
+        mock_call.return_value = {
+            "signals": [
+                {"instrument": "Gold", "ticker": "GC",
+                 "asset_class": "Precious Metals",
+                 "signal_type": "BUY", "signal_status": "ACTIVE",
+                 "origin_price": 2900.0, "cancel_direction": "BELOW",
+                 "cancel_level": 2850.0, "raw_text": "gold buy"},
+                {"instrument": "Silver", "ticker": "SI",
+                 "asset_class": "Precious Metals",
+                 "signal_type": "SELL", "signal_status": "ACTIVE",
+                 "origin_price": 33.0, "cancel_direction": "ABOVE",
+                 "cancel_level": 34.0, "raw_text": "silver sell"},
+            ],
+            "cycles": [],
+            "price_targets": [],
+        }
+
+        result = parse_email_signals_llm("Continues on a buy signal from 2900 as long as there is no close below 2850. Test email body.",
+                                          "2026-02-18", 3, api_key="test-key")
+        self.assertEqual(len(result["signals"]), 2)
+        tickers = {s["ticker"] for s in result["signals"]}
+        self.assertEqual(tickers, {"GC", "SI"})
+
+    @patch("nenner_engine.llm_parser._call_llm")
+    def test_unknown_ticker_filtered(self, mock_call):
+        mock_call.return_value = {
+            "signals": [
+                {"instrument": "FakeInstrument", "ticker": "FAKE",
+                 "asset_class": "Unknown",
+                 "signal_type": "BUY", "signal_status": "ACTIVE",
+                 "origin_price": 100.0, "cancel_direction": "BELOW",
+                 "cancel_level": 95.0, "raw_text": "fake"},
+            ],
+            "cycles": [],
+            "price_targets": [],
+        }
+
+        result = parse_email_signals_llm("Continues on a buy signal from 2900 as long as there is no close below 2850. Test email body.",
+                                          "2026-02-18", 4, api_key="test-key")
+        self.assertEqual(len(result["signals"]), 0)
+
+    def test_empty_body(self):
+        result = parse_email_signals_llm("", "2026-02-18", 5, api_key="test-key")
+        self.assertEqual(result, {"signals": [], "cycles": [], "price_targets": []})
+
+    def test_short_body(self):
+        result = parse_email_signals_llm("hi", "2026-02-18", 6, api_key="test-key")
+        self.assertEqual(result, {"signals": [], "cycles": [], "price_targets": []})
+
+    @patch("nenner_engine.llm_parser._call_llm")
+    def test_api_error_returns_empty(self, mock_call):
+        mock_call.return_value = {"signals": [], "cycles": [], "price_targets": []}
+
+        result = parse_email_signals_llm(
+            "A real email body with enough text to pass the length check here.",
+            "2026-02-18", 7, api_key="test-key"
+        )
+        self.assertEqual(result["signals"], [])
+        self.assertEqual(result["cycles"], [])
+
+    @patch("nenner_engine.llm_parser._call_llm")
+    def test_malformed_response_returns_empty(self, mock_call):
+        # _call_llm returns empty on JSON parse failure
+        mock_call.return_value = {"signals": [], "cycles": [], "price_targets": []}
+
+        result = parse_email_signals_llm(
+            "A real email body with enough text to pass the length check here.",
+            "2026-02-18", 8, api_key="test-key"
+        )
+        self.assertEqual(result["signals"], [])
+
+
+# ---------------------------------------------------------------------------
+# Auto-Cancel Tests (in-memory database)
+# ---------------------------------------------------------------------------
+
+import json
+from nenner_engine.auto_cancel import check_auto_cancellations
+from nenner_engine.db import store_email, store_parsed_results
+
+
+class TestAutoCancel(unittest.TestCase):
+    """Test automatic cancellation detection using in-memory SQLite."""
+
+    def setUp(self):
+        self.conn = init_db(":memory:")
+        migrate_db(self.conn)
+
+    def _insert_signal(self, ticker, instrument, signal_type, signal_status,
+                       origin_price, cancel_direction, cancel_level,
+                       uses_hourly_close=0):
+        """Helper to insert a signal and rebuild state."""
+        email_id = store_email(
+            self.conn, f"test-{ticker}-{signal_type}",
+            f"Test {ticker}", "2026-02-17", "morning_update", "test"
+        )
+        results = {
+            "signals": [{
+                "email_id": email_id,
+                "date": "2026-02-17",
+                "instrument": instrument,
+                "ticker": ticker,
+                "asset_class": "Test",
+                "signal_type": signal_type,
+                "signal_status": signal_status,
+                "origin_price": origin_price,
+                "cancel_direction": cancel_direction,
+                "cancel_level": cancel_level,
+                "trigger_direction": None,
+                "trigger_level": None,
+                "price_target": None,
+                "target_direction": None,
+                "note_the_change": 0,
+                "uses_hourly_close": uses_hourly_close,
+                "raw_text": "test signal",
+            }],
+            "cycles": [],
+            "price_targets": [],
+        }
+        store_parsed_results(self.conn, results, email_id)
+
+    def _insert_price(self, ticker, date, close_price):
+        """Helper to insert a price record."""
+        self.conn.execute(
+            "INSERT OR REPLACE INTO price_history (ticker, date, close, source) "
+            "VALUES (?, ?, ?, 'test')",
+            (ticker, date, close_price)
+        )
+        self.conn.commit()
+
+    @patch("nenner_engine.prices.fetch_yfinance_daily")
+    def test_cancel_above_breached(self, mock_fetch):
+        """SELL signal cancelled when close > cancel level (ABOVE)."""
+        self._insert_signal("TSLA", "Tesla", "SELL", "ACTIVE",
+                            425.0, "ABOVE", 418.0)
+        self._insert_price("TSLA", "2026-02-18", 420.0)
+
+        cancellations = check_auto_cancellations(self.conn, "2026-02-18")
+        self.assertEqual(len(cancellations), 1)
+        self.assertEqual(cancellations[0]["ticker"], "TSLA")
+        self.assertEqual(cancellations[0]["old_signal"], "SELL")
+        self.assertEqual(cancellations[0]["new_signal"], "BUY")
+
+        # Verify state was rebuilt
+        row = self.conn.execute(
+            "SELECT effective_signal, implied_reversal FROM current_state WHERE ticker = 'TSLA'"
+        ).fetchone()
+        self.assertEqual(row["effective_signal"], "BUY")
+        self.assertEqual(row["implied_reversal"], 1)
+
+    @patch("nenner_engine.prices.fetch_yfinance_daily")
+    def test_cancel_below_breached(self, mock_fetch):
+        """BUY signal cancelled when close < cancel level (BELOW)."""
+        self._insert_signal("GC", "Gold", "BUY", "ACTIVE",
+                            2900.0, "BELOW", 2850.0)
+        self._insert_price("GC", "2026-02-18", 2840.0)
+
+        cancellations = check_auto_cancellations(self.conn, "2026-02-18")
+        self.assertEqual(len(cancellations), 1)
+        self.assertEqual(cancellations[0]["old_signal"], "BUY")
+        self.assertEqual(cancellations[0]["new_signal"], "SELL")
+
+    @patch("nenner_engine.prices.fetch_yfinance_daily")
+    def test_cancel_not_breached(self, mock_fetch):
+        """Signal NOT cancelled when close doesn't breach cancel level."""
+        self._insert_signal("TSLA", "Tesla", "SELL", "ACTIVE",
+                            425.0, "ABOVE", 418.0)
+        self._insert_price("TSLA", "2026-02-18", 410.0)
+
+        cancellations = check_auto_cancellations(self.conn, "2026-02-18")
+        self.assertEqual(len(cancellations), 0)
+
+    @patch("nenner_engine.prices.fetch_yfinance_daily")
+    def test_cancel_exact_level_not_breached(self, mock_fetch):
+        """Close exactly at cancel level should NOT trigger (strict inequality)."""
+        self._insert_signal("TSLA", "Tesla", "SELL", "ACTIVE",
+                            425.0, "ABOVE", 418.0)
+        self._insert_price("TSLA", "2026-02-18", 418.0)
+
+        cancellations = check_auto_cancellations(self.conn, "2026-02-18")
+        self.assertEqual(len(cancellations), 0)
+
+    @patch("nenner_engine.prices.fetch_yfinance_daily")
+    def test_hourly_close_skipped(self, mock_fetch):
+        """Instruments with uses_hourly_close=1 are skipped."""
+        self._insert_signal("ES", "S&P", "BUY", "ACTIVE",
+                            6000.0, "BELOW", 5950.0, uses_hourly_close=1)
+        self._insert_price("ES", "2026-02-18", 5900.0)
+
+        cancellations = check_auto_cancellations(self.conn, "2026-02-18")
+        self.assertEqual(len(cancellations), 0)
+
+    @patch("nenner_engine.prices.fetch_yfinance_daily")
+    def test_multiple_instruments(self, mock_fetch):
+        """Two instruments, one breached and one not."""
+        self._insert_signal("TSLA", "Tesla", "SELL", "ACTIVE",
+                            425.0, "ABOVE", 418.0)
+        self._insert_signal("MSFT", "Microsoft", "SELL", "ACTIVE",
+                            469.0, "ABOVE", 409.0)
+        self._insert_price("TSLA", "2026-02-18", 420.0)
+        self._insert_price("MSFT", "2026-02-18", 400.0)
+
+        cancellations = check_auto_cancellations(self.conn, "2026-02-18")
+        self.assertEqual(len(cancellations), 1)
+        self.assertEqual(cancellations[0]["ticker"], "TSLA")
+
+    @patch("nenner_engine.prices.fetch_yfinance_daily")
+    def test_no_price_data(self, mock_fetch):
+        """No crash when there's no price data for an instrument."""
+        self._insert_signal("TSLA", "Tesla", "SELL", "ACTIVE",
+                            425.0, "ABOVE", 418.0)
+        # No price inserted
+
+        cancellations = check_auto_cancellations(self.conn, "2026-02-18")
+        self.assertEqual(len(cancellations), 0)
+
+    @patch("nenner_engine.prices.fetch_yfinance_daily")
+    def test_duplicate_auto_cancel_ignored(self, mock_fetch):
+        """Running auto-cancel twice for the same date produces no duplicates."""
+        self._insert_signal("TSLA", "Tesla", "SELL", "ACTIVE",
+                            425.0, "ABOVE", 418.0)
+        self._insert_price("TSLA", "2026-02-18", 420.0)
+
+        c1 = check_auto_cancellations(self.conn, "2026-02-18")
+        self.assertEqual(len(c1), 1)
+
+        # Second run — state already flipped, and message_id is duplicate
+        c2 = check_auto_cancellations(self.conn, "2026-02-18")
+        self.assertEqual(len(c2), 0)
+
+    def tearDown(self):
+        self.conn.close()
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
