@@ -824,5 +824,266 @@ class TestAlertEngine(unittest.TestCase):
         self.assertIn("No alerts recorded yet", buf.getvalue())
 
 
+# ========================================================================
+# Position Tracker Tests
+# ========================================================================
+
+from nenner_engine.positions import (
+    parse_option_code,
+    compute_position_pnl,
+    get_held_tickers,
+)
+
+
+class TestOptionCodeParser(unittest.TestCase):
+    """Tests for the option code regex parser."""
+
+    def test_tsla_put_near(self):
+        result = parse_option_code("TSLA2620N410")
+        self.assertEqual(result["underlying"], "TSLA")
+        self.assertEqual(result["option_type"], "PUT")
+        self.assertEqual(result["strike"], 410.0)
+        self.assertEqual(result["type_code"], "N")
+        self.assertEqual(result["year"], 2026)
+        self.assertEqual(result["day"], 20)
+
+    def test_tsla_put_decimal_strike(self):
+        result = parse_option_code("TSLA2620N407.5")
+        self.assertEqual(result["underlying"], "TSLA")
+        self.assertEqual(result["strike"], 407.5)
+        self.assertEqual(result["option_type"], "PUT")
+
+    def test_bac_put_near(self):
+        result = parse_option_code("BAC2620N51")
+        self.assertEqual(result["underlying"], "BAC")
+        self.assertEqual(result["strike"], 51.0)
+        self.assertEqual(result["option_type"], "PUT")
+
+    def test_bac_put_half_strike(self):
+        result = parse_option_code("BAC2620N50.5")
+        self.assertEqual(result["strike"], 50.5)
+
+    def test_call_near(self):
+        result = parse_option_code("QQQ2620B610")
+        self.assertEqual(result["underlying"], "QQQ")
+        self.assertEqual(result["option_type"], "CALL")
+        self.assertEqual(result["strike"], 610.0)
+        self.assertEqual(result["type_code"], "B")
+
+    def test_put_far(self):
+        result = parse_option_code("SIL2715M85")
+        self.assertEqual(result["underlying"], "SIL")
+        self.assertEqual(result["option_type"], "PUT")
+        self.assertEqual(result["strike"], 85.0)
+        self.assertEqual(result["type_code"], "M")
+        self.assertEqual(result["year"], 2027)
+
+    def test_call_far(self):
+        result = parse_option_code("SIL2715A100")
+        self.assertEqual(result["option_type"], "CALL")
+        self.assertEqual(result["type_code"], "A")
+
+    def test_plain_ticker_returns_none(self):
+        self.assertIsNone(parse_option_code("TSLA"))
+        self.assertIsNone(parse_option_code("BAC"))
+        self.assertIsNone(parse_option_code("QQQ"))
+        self.assertIsNone(parse_option_code("SIL"))
+
+    def test_empty_string_returns_none(self):
+        self.assertIsNone(parse_option_code(""))
+        self.assertIsNone(parse_option_code(None))
+
+
+class TestPositionPnL(unittest.TestCase):
+    """Tests for dollar P/L calculation."""
+
+    def test_covered_put_stock_drops_profit(self):
+        """Short stock at 410.75, stock drops to 400 -> $21,500 stock profit."""
+        position = {
+            "legs": [
+                {"side": "SHORT", "ticker": "TSLA", "shares": 2000,
+                 "entry_price": 410.75, "proceeds": 821500.0,
+                 "is_option": False, "option_type": None, "strike": None},
+            ],
+        }
+        result = compute_position_pnl(position, current_price=400.0)
+        self.assertAlmostEqual(result["stock_pnl_dollar"], 21500.0)
+        self.assertEqual(result["option_pnl_dollar"], 0.0)
+        self.assertAlmostEqual(result["total_pnl_dollar"], 21500.0)
+
+    def test_covered_put_stock_rises_loss(self):
+        """Short stock at 410.75, stock rises to 420 -> $-18,500 stock loss."""
+        position = {
+            "legs": [
+                {"side": "SHORT", "ticker": "TSLA", "shares": 2000,
+                 "entry_price": 410.75, "proceeds": 821500.0,
+                 "is_option": False, "option_type": None, "strike": None},
+            ],
+        }
+        result = compute_position_pnl(position, current_price=420.0)
+        self.assertAlmostEqual(result["stock_pnl_dollar"], -18500.0)
+
+    def test_covered_call_long_stock_profit(self):
+        """Long stock at 604.20, stock rises to 610 -> $14,500 profit."""
+        position = {
+            "legs": [
+                {"side": "LONG", "ticker": "QQQ", "shares": 2500,
+                 "entry_price": 604.20, "proceeds": -1510500.0,
+                 "is_option": False, "option_type": None, "strike": None},
+            ],
+        }
+        result = compute_position_pnl(position, current_price=610.0)
+        self.assertAlmostEqual(result["stock_pnl_dollar"], 14500.0)
+
+    def test_short_put_otm_full_profit(self):
+        """Short put at 410 strike, sold for 4.26, stock at 415 (OTM) -> full premium profit."""
+        position = {
+            "legs": [
+                {"side": "SHORT", "ticker": "TSLA2620N410", "shares": 2000,
+                 "entry_price": 4.26, "proceeds": 8520.0,
+                 "is_option": True, "option_type": "PUT", "strike": 410.0},
+            ],
+        }
+        result = compute_position_pnl(position, current_price=415.0)
+        # OTM: intrinsic=0, profit = (4.26 - 0) * 2000 = 8520
+        self.assertAlmostEqual(result["option_pnl_dollar"], 8520.0)
+
+    def test_short_put_itm_partial_loss(self):
+        """Short put at 410, sold for 4.26, stock at 400 -> losing money."""
+        position = {
+            "legs": [
+                {"side": "SHORT", "ticker": "TSLA2620N410", "shares": 2000,
+                 "entry_price": 4.26, "proceeds": 8520.0,
+                 "is_option": True, "option_type": "PUT", "strike": 410.0},
+            ],
+        }
+        result = compute_position_pnl(position, current_price=400.0)
+        # ITM: intrinsic = 410-400 = 10, P/L = (4.26 - 10) * 2000 = -11480
+        self.assertAlmostEqual(result["option_pnl_dollar"], -11480.0)
+
+    def test_long_call_itm(self):
+        """Long call at 85 strike, paid 25.8, stock at 110 -> profit."""
+        position = {
+            "legs": [
+                {"side": "LONG", "ticker": None, "shares": 2500,
+                 "entry_price": 25.8, "proceeds": -64500.0,
+                 "is_option": True, "option_type": "CALL", "strike": 85.0},
+            ],
+        }
+        result = compute_position_pnl(position, current_price=110.0)
+        # intrinsic = 110-85 = 25, P/L = (25 - 25.8) * 2500 = -2000
+        self.assertAlmostEqual(result["option_pnl_dollar"], -2000.0)
+
+    def test_combined_covered_put(self):
+        """Short stock + short put, stock drops -> net profit."""
+        position = {
+            "legs": [
+                {"side": "SHORT", "ticker": "TSLA", "shares": 2000,
+                 "entry_price": 410.75, "proceeds": 821500.0,
+                 "is_option": False, "option_type": None, "strike": None},
+                {"side": "SHORT", "ticker": "TSLA2620N410", "shares": 2000,
+                 "entry_price": 4.26, "proceeds": 8520.0,
+                 "is_option": True, "option_type": "PUT", "strike": 410.0},
+            ],
+        }
+        result = compute_position_pnl(position, current_price=400.0)
+        # Stock: (410.75-400)*2000 = 21500
+        # Put ITM: (4.26 - 10)*2000 = -11480
+        # Total: 21500 - 11480 = 10020
+        self.assertAlmostEqual(result["total_pnl_dollar"], 10020.0)
+
+    def test_empty_legs(self):
+        position = {"legs": []}
+        result = compute_position_pnl(position, current_price=400.0)
+        self.assertEqual(result["total_pnl_dollar"], 0.0)
+        self.assertEqual(result["stock_pnl_dollar"], 0.0)
+        self.assertEqual(result["option_pnl_dollar"], 0.0)
+
+
+class TestGetHeldTickers(unittest.TestCase):
+    """Tests for get_held_tickers."""
+
+    def test_returns_underlying_tickers(self):
+        positions = [
+            {"underlying": "TSLA", "legs": [{"side": "SHORT"}]},
+            {"underlying": "BAC", "legs": [{"side": "SHORT"}]},
+        ]
+        result = get_held_tickers(positions)
+        self.assertEqual(result, {"TSLA", "BAC"})
+
+    def test_empty_positions(self):
+        self.assertEqual(get_held_tickers([]), set())
+
+    def test_skips_empty_legs(self):
+        positions = [
+            {"underlying": "TSLA", "legs": [{"side": "SHORT"}]},
+            {"underlying": "QQQ", "legs": []},
+        ]
+        result = get_held_tickers(positions)
+        self.assertEqual(result, {"TSLA"})
+
+
+class TestPositionSignalContext(unittest.TestCase):
+    """Tests for position-signal linking."""
+
+    def setUp(self):
+        self.conn = init_db(":memory:")
+        migrate_db(self.conn)
+        # Insert a TSLA SELL signal via current_state directly
+        self.conn.execute("""
+            INSERT INTO current_state
+            (ticker, instrument, asset_class, effective_signal, origin_price,
+             cancel_direction, cancel_level, trigger_level, implied_reversal,
+             last_signal_date)
+            VALUES ('TSLA', 'Tesla', 'Single Stock', 'SELL', 425.0,
+                    'above', 450.0, 400.0, 0, '2026-02-15')
+        """)
+        self.conn.commit()
+
+    def test_held_ticker_gets_signal(self):
+        from nenner_engine.positions import get_positions_with_signal_context
+        positions = [{
+            "sheet_name": "TradeSheet PUTS",
+            "strategy": "covered_put",
+            "underlying": "TSLA",
+            "underlying_bid": 411.0,
+            "near_expiry": "2026-02-20",
+            "legs": [
+                {"side": "SHORT", "ticker": "TSLA", "shares": 2000,
+                 "entry_price": 410.75, "proceeds": 821500.0,
+                 "is_option": False, "option_type": None, "strike": None},
+            ],
+        }]
+        enriched = get_positions_with_signal_context(
+            self.conn, positions, try_t1=False,
+        )
+        self.assertEqual(len(enriched), 1)
+        self.assertEqual(enriched[0]["nenner_signal"], "SELL")
+        self.assertEqual(enriched[0]["cancel_level"], 450.0)
+        self.assertIsNotNone(enriched[0]["total_pnl_dollar"])
+
+    def test_unknown_ticker_no_signal(self):
+        from nenner_engine.positions import get_positions_with_signal_context
+        positions = [{
+            "sheet_name": "Put_Call Trade",
+            "strategy": "collar",
+            "underlying": "XYZ",
+            "underlying_bid": 100.0,
+            "legs": [
+                {"side": "SHORT", "ticker": "XYZ", "shares": 1000,
+                 "entry_price": 95.0, "proceeds": 95000.0,
+                 "is_option": False, "option_type": None, "strike": None},
+            ],
+        }]
+        enriched = get_positions_with_signal_context(
+            self.conn, positions, try_t1=False,
+        )
+        self.assertEqual(len(enriched), 1)
+        self.assertIsNone(enriched[0]["nenner_signal"])
+
+    def tearDown(self):
+        self.conn.close()
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

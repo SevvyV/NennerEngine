@@ -14,6 +14,59 @@ from .imap_client import backfill_imap, check_new_emails, import_eml_folder
 from .reporting import show_status, show_history, export_csv
 from .prices import fetch_yfinance_daily, get_prices_with_signal_context
 from .alerts import run_monitor, show_alert_history
+from .positions import read_positions, get_positions_with_signal_context
+
+
+def _show_positions(conn):
+    """Display current trade positions with dollar P/L and Nenner signal context."""
+    positions = read_positions()
+    if not positions:
+        print("No positions available (workbook may not be open).")
+        return
+
+    enriched = get_positions_with_signal_context(conn, positions)
+
+    header = (
+        f"{'Underlying':<10} {'Strategy':<14} {'Shares':>8} "
+        f"{'Current':>12} {'Stock P/L':>12} {'Opt P/L':>12} "
+        f"{'Total P/L':>12} {'Signal':<6} {'CxDist%':>8}"
+    )
+    print("=" * len(header))
+    print(header)
+    print("=" * len(header))
+
+    grand_total = 0.0
+    for p in enriched:
+        underlying = p["underlying"]
+        strategy = p["strategy"].replace("_", " ").title()
+        # Sum shares across stock legs only
+        stock_shares = sum(
+            leg["shares"] for leg in p["legs"] if not leg["is_option"]
+        )
+        current = p.get("current_price")
+        stock_pnl = p["stock_pnl_dollar"]
+        opt_pnl = p["option_pnl_dollar"]
+        total_pnl = p["total_pnl_dollar"]
+        signal = p.get("nenner_signal") or "—"
+        cdist = p.get("cancel_dist_pct")
+
+        current_str = f"{current:,.2f}" if current else "—"
+        shares_str = f"{stock_shares:,.0f}" if stock_shares else "—"
+        stock_str = f"${stock_pnl:+,.0f}"
+        opt_str = f"${opt_pnl:+,.0f}"
+        total_str = f"${total_pnl:+,.0f}"
+        cdist_str = f"{cdist:+.1f}%" if cdist is not None else "—"
+
+        print(
+            f"{underlying:<10} {strategy:<14} {shares_str:>8} "
+            f"{current_str:>12} {stock_str:>12} {opt_str:>12} "
+            f"{total_str:>12} {signal:<6} {cdist_str:>8}"
+        )
+        grand_total += total_pnl
+
+    print("=" * len(header))
+    print(f"{'TOTAL':>58} ${grand_total:+,.0f}")
+    print(f"\n{len(enriched)} positions")
 
 
 def _show_prices(conn):
@@ -93,6 +146,7 @@ Examples:
   nenner-engine --monitor               Start alert monitoring daemon
   nenner-engine --monitor --interval 30 Monitor with 30-second checks
   nenner-engine --alert-history         Show recent alert log
+  nenner-engine --positions             Show trade positions with P/L
         """,
     )
     parser.add_argument("--backfill", action="store_true",
@@ -117,6 +171,8 @@ Examples:
                         help="Alert check interval in seconds (default: 60)")
     parser.add_argument("--alert-history", action="store_true",
                         help="Show recent alerts from alert_log")
+    parser.add_argument("--positions", action="store_true",
+                        help="Show trade positions with dollar P/L")
     parser.add_argument("--db", type=str, default=default_db,
                         help=f"Database path (default: {default_db})")
 
@@ -126,7 +182,9 @@ Examples:
     conn = init_db(args.db)
     migrate_db(conn)
 
-    if args.monitor:
+    if args.positions:
+        _show_positions(conn)
+    elif args.monitor:
         run_monitor(conn, interval=args.interval)
     elif args.alert_history:
         show_alert_history(conn)

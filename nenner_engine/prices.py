@@ -96,6 +96,8 @@ YFINANCE_MAP: dict[str, str | None] = {
     "AXP":      "AXP",
     "C":        "C",
     "GS":       "GS",
+    "QQQ":      "QQQ",
+    "SIL":      "SIL",
 }
 
 # Reverse lookup: yFinance symbol → canonical ticker
@@ -185,6 +187,8 @@ LSEG_RIC_MAP: dict[str, str | None] = {
     "AXP":      "AXP",
     "C":        "C",
     "GS":       "GS",
+    "QQQ":      "QQQ",
+    "SIL":      "SIL",
 }
 
 # Reverse lookup: LSEG RIC → canonical ticker
