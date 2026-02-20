@@ -104,6 +104,20 @@ def init_db(db_path: str) -> sqlite3.Connection:
             last_signal_date TEXT
         );
 
+        -- Price history for daily closes and real-time snapshots.
+        CREATE TABLE IF NOT EXISTS price_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticker TEXT NOT NULL,
+            date TEXT NOT NULL,
+            open REAL,
+            high REAL,
+            low REAL,
+            close REAL,
+            source TEXT NOT NULL,
+            fetched_at TEXT DEFAULT (datetime('now')),
+            UNIQUE(ticker, date, source)
+        );
+
         CREATE INDEX IF NOT EXISTS idx_signals_date ON signals(date);
         CREATE INDEX IF NOT EXISTS idx_signals_instrument ON signals(instrument);
         CREATE INDEX IF NOT EXISTS idx_signals_ticker ON signals(ticker);
@@ -112,6 +126,19 @@ def init_db(db_path: str) -> sqlite3.Connection:
         CREATE INDEX IF NOT EXISTS idx_cycles_instrument ON cycles(instrument);
         CREATE INDEX IF NOT EXISTS idx_emails_message_id ON emails(message_id);
         CREATE INDEX IF NOT EXISTS idx_emails_date ON emails(date_sent);
+        CREATE INDEX IF NOT EXISTS idx_price_history_ticker_date
+            ON price_history(ticker, date DESC);
+    """)
+    # Create views (outside executescript for compatibility)
+    conn.execute("""
+        CREATE VIEW IF NOT EXISTS latest_prices AS
+        SELECT p.ticker, p.date, p.close, p.source, p.fetched_at
+        FROM price_history p
+        INNER JOIN (
+            SELECT ticker, MAX(date) as max_date
+            FROM price_history
+            GROUP BY ticker
+        ) lp ON p.ticker = lp.ticker AND p.date = lp.max_date
     """)
     conn.commit()
     return conn
@@ -141,12 +168,56 @@ def migrate_db(conn: sqlite3.Connection):
             last_signal_date TEXT
         )""",
         "CREATE INDEX IF NOT EXISTS idx_signals_status ON signals(signal_status)",
+        # v3: Add price_history table
+        """CREATE TABLE IF NOT EXISTS price_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticker TEXT NOT NULL,
+            date TEXT NOT NULL,
+            open REAL,
+            high REAL,
+            low REAL,
+            close REAL,
+            source TEXT NOT NULL,
+            fetched_at TEXT DEFAULT (datetime('now')),
+            UNIQUE(ticker, date, source)
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_price_history_ticker_date ON price_history(ticker, date DESC)",
+        # v4: Add alert_log table for alert engine audit trail
+        """CREATE TABLE IF NOT EXISTS alert_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticker TEXT NOT NULL,
+            instrument TEXT,
+            alert_type TEXT NOT NULL,
+            severity TEXT NOT NULL,
+            message TEXT NOT NULL,
+            current_price REAL,
+            cancel_dist_pct REAL,
+            trigger_dist_pct REAL,
+            effective_signal TEXT,
+            channels_sent TEXT,
+            created_at TEXT DEFAULT (datetime('now'))
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_alert_log_ticker ON alert_log(ticker, alert_type, created_at DESC)",
     ]
     for sql in migrations:
         try:
             conn.execute(sql)
         except sqlite3.OperationalError:
             pass  # Already exists
+    # Create views (idempotent)
+    try:
+        conn.execute("""
+            CREATE VIEW IF NOT EXISTS latest_prices AS
+            SELECT p.ticker, p.date, p.close, p.source, p.fetched_at
+            FROM price_history p
+            INNER JOIN (
+                SELECT ticker, MAX(date) as max_date
+                FROM price_history
+                GROUP BY ticker
+            ) lp ON p.ticker = lp.ticker AND p.date = lp.max_date
+        """)
+    except sqlite3.OperationalError:
+        pass  # View already exists
     conn.commit()
     log.info("Database migrations applied")
 

@@ -48,6 +48,32 @@ from .reporting import (
     show_history,
     export_csv,
 )
+from .prices import (
+    YFINANCE_MAP,
+    LSEG_RIC_MAP,
+    fetch_yfinance_daily,
+    backfill_yfinance,
+    read_t1_prices,
+    store_t1_prices,
+    setup_t1_sheet,
+    get_current_prices,
+    get_prices_with_signal_context,
+    store_prices,
+    get_cached_prices,
+)
+
+from .alerts import (
+    evaluate_price_alerts,
+    detect_signal_changes,
+    run_monitor,
+    show_alert_history,
+    send_toast,
+    send_telegram,
+    dispatch_alert,
+    PROXIMITY_DANGER_PCT,
+    PROXIMITY_WARNING_PCT,
+    ALERT_COOLDOWN_MINUTES,
+)
 
 __all__ = [
     # Instruments
@@ -64,4 +90,15 @@ __all__ = [
     "check_new_emails", "import_eml_folder",
     # Reporting
     "show_status", "show_history", "export_csv",
+    # Prices
+    "YFINANCE_MAP", "LSEG_RIC_MAP",
+    "fetch_yfinance_daily", "backfill_yfinance",
+    "read_t1_prices", "store_t1_prices", "setup_t1_sheet",
+    "get_current_prices", "get_prices_with_signal_context",
+    "store_prices", "get_cached_prices",
+    # Alerts
+    "evaluate_price_alerts", "detect_signal_changes",
+    "run_monitor", "show_alert_history",
+    "send_toast", "send_telegram", "dispatch_alert",
+    "PROXIMITY_DANGER_PCT", "PROXIMITY_WARNING_PCT", "ALERT_COOLDOWN_MINUTES",
 ]
