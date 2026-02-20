@@ -58,8 +58,8 @@ def get_credentials() -> tuple[str, str]:
             client = SecretClient(vault_url=vault_url, credential=credential)
             addr_secret = os.environ.get("GMAIL_ADDRESS_SECRET", "gmail-address")
             pass_secret = os.environ.get("GMAIL_PASSWORD_SECRET", "GmailAppPassword4Nennerbot")
-            gmail_addr = client.get_secret(addr_secret).value
-            gmail_pass = client.get_secret(pass_secret).value
+            gmail_addr = client.get_secret(addr_secret).value.strip().replace("\xa0", "")
+            gmail_pass = client.get_secret(pass_secret).value.strip().replace("\xa0", "")
             return gmail_addr, gmail_pass
         except Exception as e:
             log.error(f"Azure Key Vault error: {e}")

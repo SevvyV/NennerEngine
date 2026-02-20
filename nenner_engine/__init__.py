@@ -90,6 +90,11 @@ from .auto_cancel import (
     check_auto_cancellations,
 )
 
+from .email_scheduler import (
+    EmailScheduler,
+    run_email_check,
+)
+
 __all__ = [
     # Instruments
     "INSTRUMENT_MAP", "identify_instrument", "get_section_instrument",
@@ -123,4 +128,6 @@ __all__ = [
     "run_monitor", "show_alert_history",
     "send_toast", "send_telegram", "dispatch_alert",
     "PROXIMITY_DANGER_PCT", "PROXIMITY_WARNING_PCT", "ALERT_COOLDOWN_MINUTES",
+    # Email Scheduler
+    "EmailScheduler", "run_email_check",
 ]

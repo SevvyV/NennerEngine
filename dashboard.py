@@ -3,6 +3,10 @@ Nenner Signal Dashboard
 ========================
 Plotly Dash dashboard for monitoring Nenner cycle research signals.
 Run: python dashboard.py [--port PORT] [--db PATH]
+
+Automatically checks for new Nenner emails:
+  - On dashboard startup (immediate)
+  - Every day at 8:00 AM Eastern Time
 """
 
 import argparse
@@ -19,8 +23,11 @@ from dash.dependencies import Input, Output
 # ---------------------------------------------------------------------------
 
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "nenner_signals.db")
-WATCHLIST_TICKERS = ["GC", "SI", "TSLA", "MSFT", "BAC"]
+WATCHLIST_TICKERS = ["GC", "SI", "TSLA", "MSFT", "BAC", "SOYB"]
 REFRESH_INTERVAL_MS = 30_000  # 30 seconds
+
+# Email scheduler singleton (initialized in main())
+_email_scheduler = None
 
 # Color palette
 COLOR_BUY = "#00bc8c"     # green
@@ -72,19 +79,27 @@ def fetch_recent_changes(days=7):
 
 
 def fetch_watchlist():
-    """Fetch watchlist instrument states."""
-    conn = get_db()
-    placeholders = ",".join("?" for _ in WATCHLIST_TICKERS)
-    rows = conn.execute(f"""
-        SELECT ticker, instrument, asset_class, effective_signal,
-               origin_price, cancel_direction, cancel_level,
-               trigger_level, implied_reversal, last_signal_date
-        FROM current_state
-        WHERE ticker IN ({placeholders})
-        ORDER BY instrument
-    """, WATCHLIST_TICKERS).fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
+    """Fetch watchlist instrument states enriched with live prices."""
+    try:
+        from nenner_engine.prices import get_prices_with_signal_context
+        conn = get_db()
+        rows = get_prices_with_signal_context(conn, tickers=WATCHLIST_TICKERS, try_t1=True)
+        conn.close()
+        return rows
+    except Exception as e:
+        # Fallback: signal-only (no prices)
+        conn = get_db()
+        placeholders = ",".join("?" for _ in WATCHLIST_TICKERS)
+        rows = conn.execute(f"""
+            SELECT ticker, instrument, asset_class, effective_signal,
+                   origin_price, cancel_direction, cancel_level,
+                   trigger_level, implied_reversal, last_signal_date
+            FROM current_state
+            WHERE ticker IN ({placeholders})
+            ORDER BY instrument
+        """, WATCHLIST_TICKERS).fetchall()
+        conn.close()
+        return [dict(r) for r in rows]
 
 
 def fetch_positions():
@@ -133,17 +148,40 @@ def signal_color(signal):
 
 
 def make_watchlist_card(row):
-    """Build a single watchlist instrument card."""
-    sig = row["effective_signal"]
+    """Build a single watchlist instrument card with live price and P/L."""
+    sig = row.get("effective_signal", "")
     color = signal_color(sig)
     implied = row.get("implied_reversal", 0)
 
-    cancel_text = ""
-    if row.get("cancel_level"):
-        direction = row.get("cancel_direction", "")
-        cancel_text = f"Cancel {direction} {row['cancel_level']:,.2f}"
+    # --- Live price ---
+    price = row.get("price")
+    price_source = row.get("price_source", "")
+    price_str = f"{price:,.2f}" if price else "—"
+    source_label = f" ({price_source})" if price_source else ""
 
-    badge_children = [sig]
+    # --- P/L ---
+    pnl_pct = row.get("pnl_pct")
+    if pnl_pct is not None:
+        pnl_color = COLOR_BUY if pnl_pct >= 0 else COLOR_SELL
+        pnl_str = f"{pnl_pct:+.1f}%"
+    else:
+        pnl_color = COLOR_NEUTRAL
+        pnl_str = ""
+
+    # --- Cancel distance ---
+    cancel_dist = row.get("cancel_dist_pct")
+    cancel_level = row.get("cancel_level")
+    if cancel_level and cancel_dist is not None:
+        direction = row.get("cancel_direction", "")
+        cancel_text = f"Cancel {direction} {cancel_level:,.2f} ({abs(cancel_dist):.1f}% away)"
+    elif cancel_level:
+        direction = row.get("cancel_direction", "")
+        cancel_text = f"Cancel {direction} {cancel_level:,.2f}"
+    else:
+        cancel_text = ""
+
+    # --- Signal badge ---
+    badge_children = [sig] if sig else ["—"]
     if implied:
         badge_children = [sig, " ", html.Small("(impl)", style={"color": COLOR_IMPLIED})]
 
@@ -151,9 +189,9 @@ def make_watchlist_card(row):
         dbc.Card([
             dbc.CardHeader(
                 html.Div([
-                    html.Span(row["ticker"], style={"fontWeight": "bold", "fontSize": "1.3rem"}),
+                    html.Span(row.get("ticker", ""), style={"fontWeight": "bold", "fontSize": "1.3rem"}),
                     html.Span(
-                        row["instrument"],
+                        row.get("instrument", ""),
                         className="ms-2",
                         style={"fontSize": "0.85rem", "color": COLOR_HEADER},
                     ),
@@ -161,21 +199,38 @@ def make_watchlist_card(row):
                 style={"backgroundColor": COLOR_CARD_BG, "borderBottom": f"3px solid {color}"},
             ),
             dbc.CardBody([
+                # Price row: large price + source tag
+                html.Div([
+                    html.Span(
+                        price_str,
+                        style={"fontSize": "1.5rem", "fontWeight": "bold", "color": "#fff"},
+                    ),
+                    html.Span(
+                        source_label,
+                        style={"fontSize": "0.7rem", "color": "#666", "marginLeft": "4px"},
+                    ),
+                    html.Span(
+                        f"  {pnl_str}",
+                        style={"fontSize": "1.0rem", "fontWeight": "bold",
+                               "color": pnl_color, "marginLeft": "8px"},
+                    ) if pnl_str else None,
+                ], style={"marginBottom": "0.4rem"}),
+                # Signal badge
                 html.Div(
                     badge_children,
                     style={
-                        "fontSize": "1.6rem",
+                        "fontSize": "1.2rem",
                         "fontWeight": "bold",
                         "color": color,
-                        "marginBottom": "0.5rem",
+                        "marginBottom": "0.3rem",
                     },
                 ),
                 html.Div(f"From {row['origin_price']:,.2f}" if row.get("origin_price") else "",
-                         style={"fontSize": "0.9rem", "color": COLOR_HEADER}),
+                         style={"fontSize": "0.85rem", "color": COLOR_HEADER}),
                 html.Div(cancel_text,
-                         style={"fontSize": "0.85rem", "color": "#888"}),
+                         style={"fontSize": "0.8rem", "color": "#888"}),
                 html.Div(row.get("last_signal_date", ""),
-                         style={"fontSize": "0.8rem", "color": "#666", "marginTop": "0.3rem"}),
+                         style={"fontSize": "0.75rem", "color": "#666", "marginTop": "0.2rem"}),
             ], style={"backgroundColor": "#1e2226"}),
         ], className="h-100", style={"border": "1px solid #444"}),
         xs=12, sm=6, md=4, lg=True,
@@ -362,8 +417,8 @@ def build_layout():
         # Auto-refresh interval
         dcc.Interval(id="refresh-interval", interval=REFRESH_INTERVAL_MS, n_intervals=0),
 
-        # Header
-        dbc.Row(
+        # Header with Refresh button
+        dbc.Row([
             dbc.Col(
                 html.Div([
                     html.H3("NENNER SIGNAL ENGINE", className="mb-0",
@@ -371,9 +426,21 @@ def build_layout():
                     html.Small("Vartanian Capital Management",
                                style={"color": COLOR_HEADER, "letterSpacing": "0.05em"}),
                 ], className="text-center py-3"),
+                width=True,
             ),
-            className="mb-2",
-        ),
+            dbc.Col(
+                dbc.Button(
+                    [html.I(className="fas fa-sync-alt me-2"), "Refresh"],
+                    id="refresh-button",
+                    color="outline-light",
+                    size="sm",
+                    className="mt-3",
+                    style={"letterSpacing": "0.05em"},
+                ),
+                width="auto",
+                className="d-flex align-items-center",
+            ),
+        ], className="mb-2 align-items-center"),
 
         # Stats bar
         html.Div(id="stats-bar"),
@@ -429,7 +496,10 @@ def build_layout():
 
 app = dash.Dash(
     __name__,
-    external_stylesheets=[dbc.themes.DARKLY],
+    external_stylesheets=[
+        dbc.themes.DARKLY,
+        "https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css",
+    ],
     title="Nenner Signal Engine",
 )
 
@@ -448,8 +518,9 @@ app.layout = build_layout
     Output("changelog-table-container", "children"),
     Output("footer-text", "children"),
     Input("refresh-interval", "n_intervals"),
+    Input("refresh-button", "n_clicks"),
 )
-def refresh_dashboard(_n):
+def refresh_dashboard(_n, _btn):
     # Stats
     stats = fetch_db_stats()
     stats_bar = make_stats_bar(stats)
@@ -527,9 +598,33 @@ def refresh_dashboard(_n):
         style_as_list_view=True,
     )
 
-    # Footer
+    # Footer with email check status
     from datetime import datetime
-    footer = f"Last refresh: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}  |  Data: {stats['date_min']} to {stats['date_max']}  |  Auto-refresh: {REFRESH_INTERVAL_MS // 1000}s"
+    footer_parts = [
+        f"Last refresh: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        f"Data: {stats['date_min']} to {stats['date_max']}",
+        f"Auto-refresh: {REFRESH_INTERVAL_MS // 1000}s",
+    ]
+
+    # Add email scheduler status
+    if _email_scheduler and _email_scheduler.last_result:
+        er = _email_scheduler.last_result
+        ts = er.get("timestamp", "?")
+        try:
+            ts_short = datetime.fromisoformat(ts).strftime("%H:%M:%S")
+        except Exception:
+            ts_short = ts
+        trigger = er.get("trigger", "?")
+        new_ct = er.get("new_emails", 0)
+        err = er.get("error")
+        if err:
+            footer_parts.append(f"Email check: ERROR at {ts_short}")
+        else:
+            footer_parts.append(
+                f"Email check: {new_ct} new @ {ts_short} ({trigger})"
+            )
+
+    footer = "  |  ".join(footer_parts)
 
     return stats_bar, wl_cards, pos_cards, signal_table, changelog_table, footer
 
@@ -543,11 +638,31 @@ def main():
     parser.add_argument("--port", type=int, default=8050, help="Port (default: 8050)")
     parser.add_argument("--db", type=str, default=None, help="Database path")
     parser.add_argument("--debug", action="store_true", help="Debug mode")
+    parser.add_argument("--no-email-check", action="store_true",
+                        help="Disable automatic email checking")
     args = parser.parse_args()
 
     if args.db:
         global DB_PATH
         DB_PATH = args.db
+
+    # --- Start email scheduler (checks on launch + daily at 8 AM ET) ---
+    global _email_scheduler
+    if not args.no_email_check:
+        try:
+            from nenner_engine.email_scheduler import EmailScheduler
+            _email_scheduler = EmailScheduler(
+                db_path=DB_PATH,
+                check_on_start=True,
+                daily_check=True,
+            )
+            _email_scheduler.start()
+            print("Email scheduler started (checks on launch + daily 8:00 AM ET)")
+        except Exception as e:
+            print(f"Warning: Email scheduler failed to start: {e}")
+            print("Dashboard will run without automatic email checking.")
+    else:
+        print("Email checking disabled (--no-email-check)")
 
     print(f"Starting Nenner Signal Dashboard on http://127.0.0.1:{args.port}")
     print(f"Database: {DB_PATH}")

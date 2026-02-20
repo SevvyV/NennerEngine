@@ -590,18 +590,19 @@ class TestLiveDatabaseValidation(unittest.TestCase):
             "SELECT * FROM current_state WHERE ticker = ?", (ticker,)
         ).fetchone()
 
-    def test_gold_sell_implied(self):
+    def test_gold_buy_implied(self):
         row = self._get_state("GC")
         self.assertIsNotNone(row, "Gold not found in current_state")
-        self.assertEqual(row["effective_signal"], "SELL")
+        self.assertEqual(row["effective_signal"], "BUY")
         self.assertEqual(row["implied_reversal"], 1)
         self.assertEqual(row["origin_price"], 5000.0)
 
-    def test_silver_sell_direct(self):
+    def test_silver_buy_implied(self):
         row = self._get_state("SI")
         self.assertIsNotNone(row)
-        self.assertEqual(row["effective_signal"], "SELL")
-        self.assertEqual(row["cancel_level"], 77.0)
+        self.assertEqual(row["effective_signal"], "BUY")
+        self.assertEqual(row["implied_reversal"], 1)
+        self.assertEqual(row["origin_price"], 77.0)
 
     def test_tsla_sell(self):
         row = self._get_state("TSLA")
@@ -650,14 +651,14 @@ class TestLiveDatabaseValidation(unittest.TestCase):
         row = self._get_state("BTC")
         self.assertIsNotNone(row)
         self.assertEqual(row["effective_signal"], "SELL")
-        self.assertEqual(row["cancel_level"], 68800.0)
+        self.assertEqual(row["cancel_level"], 68500.0)
 
-    def test_nem_outlier_buy(self):
-        """NEM is the outlier — still on buy while rest of gold complex is sell."""
+    def test_nem_buy(self):
+        """NEM — on buy signal."""
         row = self._get_state("NEM")
         self.assertIsNotNone(row)
         self.assertEqual(row["effective_signal"], "BUY")
-        self.assertEqual(row["cancel_level"], 121.0)
+        self.assertEqual(row["cancel_level"], 122.0)
 
     def test_database_stats(self):
         """Verify database has expected volume of data."""

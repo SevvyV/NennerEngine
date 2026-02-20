@@ -422,6 +422,10 @@ def run_monitor(conn: sqlite3.Connection, interval: int = 60):
 
     Polls every `interval` seconds, evaluates all alert conditions,
     dispatches notifications, and handles graceful shutdown via Ctrl+C.
+
+    Also starts a background email scheduler that:
+      - Checks for new Nenner emails on startup
+      - Checks daily at 8:00 AM Eastern Time
     """
     from .prices import get_prices_with_signal_context
 
@@ -455,6 +459,22 @@ def run_monitor(conn: sqlite3.Connection, interval: int = 60):
     except ImportError:
         log.warning("winotify not installed -- pip install winotify "
                     "(toast notifications disabled)")
+
+    # --- Start email scheduler (checks on launch + daily 8 AM ET) ---
+    email_sched = None
+    try:
+        from .email_scheduler import EmailScheduler
+        db_path = conn.execute("PRAGMA database_list").fetchone()[2]
+        email_sched = EmailScheduler(
+            db_path=db_path,
+            check_on_start=True,
+            daily_check=True,
+        )
+        email_sched.start()
+        log.info("Email scheduler active (startup + daily 8:00 AM ET)")
+    except Exception as e:
+        log.warning(f"Email scheduler failed to start: {e}")
+        log.warning("Monitor will run without automatic email checking")
 
     # Initialize state
     cooldown_tracker: dict[tuple[str, str], datetime] = {}
@@ -568,6 +588,10 @@ def run_monitor(conn: sqlite3.Connection, interval: int = 60):
             if shutdown:
                 break
             time.sleep(1)
+
+    # Stop email scheduler
+    if email_sched:
+        email_sched.stop()
 
     log.info(f"Alert monitor stopped. {check_count} checks, "
              f"{total_alerts} alerts fired.")
