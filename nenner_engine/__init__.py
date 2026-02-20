@@ -62,6 +62,14 @@ from .prices import (
     get_cached_prices,
 )
 
+from .positions import (
+    read_positions,
+    parse_option_code,
+    compute_position_pnl,
+    get_positions_with_signal_context,
+    get_held_tickers,
+)
+
 from .alerts import (
     evaluate_price_alerts,
     detect_signal_changes,
@@ -96,6 +104,9 @@ __all__ = [
     "read_t1_prices", "store_t1_prices", "setup_t1_sheet",
     "get_current_prices", "get_prices_with_signal_context",
     "store_prices", "get_cached_prices",
+    # Positions
+    "read_positions", "parse_option_code", "compute_position_pnl",
+    "get_positions_with_signal_context", "get_held_tickers",
     # Alerts
     "evaluate_price_alerts", "detect_signal_changes",
     "run_monitor", "show_alert_history",

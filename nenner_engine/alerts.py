@@ -483,8 +483,36 @@ def run_monitor(conn: sqlite3.Connection, interval: int = 60):
                 conn, last_signal_id
             )
 
-            # 3. Dispatch all alerts
+            # 3. Enrich alerts with position P/L for held instruments
             all_alerts = price_alerts + signal_alerts
+            try:
+                from .positions import (
+                    read_positions, compute_position_pnl, get_held_tickers,
+                )
+                positions = read_positions()
+                held = get_held_tickers(positions)
+                if held:
+                    # Build price lookup from rows
+                    price_by_ticker = {
+                        r["ticker"]: r.get("price")
+                        for r in rows if r.get("price")
+                    }
+                    for alert in all_alerts:
+                        tk = alert.get("ticker")
+                        if tk in held:
+                            pos = next(
+                                (p for p in positions if p["underlying"] == tk),
+                                None,
+                            )
+                            cp = price_by_ticker.get(tk) or alert.get("current_price")
+                            if pos and cp:
+                                pnl = compute_position_pnl(pos, cp)
+                                dollar = pnl["total_pnl_dollar"]
+                                alert["message"] += (
+                                    f" | Position P/L: ${dollar:+,.0f}"
+                                )
+            except Exception as e:
+                log.debug(f"Position enrichment skipped: {e}")
             fired = 0
             for alert in all_alerts:
                 if dispatch_alert(alert, cooldown_tracker, conn,

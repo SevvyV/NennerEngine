@@ -87,6 +87,18 @@ def fetch_watchlist():
     return [dict(r) for r in rows]
 
 
+def fetch_positions():
+    """Fetch live positions from Excel and enrich with Nenner signals."""
+    try:
+        from nenner_engine.positions import get_positions_with_signal_context
+        conn = get_db()
+        enriched = get_positions_with_signal_context(conn)
+        conn.close()
+        return enriched
+    except Exception:
+        return []
+
+
 def fetch_db_stats():
     """Fetch database summary stats."""
     conn = get_db()
@@ -195,6 +207,83 @@ def make_stats_bar(stats):
     return dbc.Row(cols, className="g-4 justify-content-center py-2")
 
 
+def make_position_card(pos):
+    """Build a single position card showing P/L and Nenner signal."""
+    underlying = pos["underlying"]
+    strategy = pos["strategy"].replace("_", " ").title()
+    total_pnl = pos["total_pnl_dollar"]
+    stock_pnl = pos["stock_pnl_dollar"]
+    opt_pnl = pos["option_pnl_dollar"]
+    signal = pos.get("nenner_signal")
+    current = pos.get("current_price")
+    cancel_dist = pos.get("cancel_dist_pct")
+    near_expiry = pos.get("near_expiry")
+
+    # P/L color
+    pnl_color = COLOR_BUY if total_pnl >= 0 else COLOR_SELL
+    sig_color = signal_color(signal) if signal else COLOR_NEUTRAL
+
+    # Stock shares (sum across stock legs)
+    stock_shares = sum(
+        leg["shares"] for leg in pos.get("legs", []) if not leg["is_option"]
+    )
+
+    detail_lines = []
+    if stock_pnl:
+        detail_lines.append(f"Stock: ${stock_pnl:+,.0f}")
+    if opt_pnl:
+        detail_lines.append(f"Options: ${opt_pnl:+,.0f}")
+
+    return dbc.Col(
+        dbc.Card([
+            dbc.CardHeader(
+                html.Div([
+                    html.Span(underlying, style={"fontWeight": "bold", "fontSize": "1.3rem"}),
+                    html.Span(
+                        strategy,
+                        className="ms-2",
+                        style={"fontSize": "0.85rem", "color": COLOR_HEADER},
+                    ),
+                ]),
+                style={"backgroundColor": COLOR_CARD_BG, "borderBottom": f"3px solid {pnl_color}"},
+            ),
+            dbc.CardBody([
+                html.Div(
+                    f"${total_pnl:+,.0f}",
+                    style={
+                        "fontSize": "1.6rem",
+                        "fontWeight": "bold",
+                        "color": pnl_color,
+                        "marginBottom": "0.3rem",
+                    },
+                ),
+                html.Div(
+                    " | ".join(detail_lines),
+                    style={"fontSize": "0.8rem", "color": COLOR_HEADER},
+                ) if detail_lines else None,
+                html.Div([
+                    html.Span(f"{signal}", style={"color": sig_color, "fontWeight": "bold"}),
+                    html.Span(
+                        f"  Cancel: {cancel_dist:+.1f}%" if cancel_dist is not None else "",
+                        style={"color": "#888", "fontSize": "0.85rem"},
+                    ),
+                ], style={"marginTop": "0.4rem", "fontSize": "0.9rem"}) if signal else None,
+                html.Div(
+                    f"{int(stock_shares):,} shares @ {current:,.2f}" if current and stock_shares else
+                    (f"Price: {current:,.2f}" if current else ""),
+                    style={"fontSize": "0.8rem", "color": "#666", "marginTop": "0.2rem"},
+                ),
+                html.Div(
+                    f"Exp: {near_expiry}" if near_expiry else "",
+                    style={"fontSize": "0.75rem", "color": "#555", "marginTop": "0.1rem"},
+                ),
+            ], style={"backgroundColor": "#1e2226"}),
+        ], className="h-100", style={"border": "1px solid #444"}),
+        xs=12, sm=6, md=3,
+        className="mb-3",
+    )
+
+
 # ---------------------------------------------------------------------------
 # DataTable Style Helpers
 # ---------------------------------------------------------------------------
@@ -300,6 +389,15 @@ def build_layout():
 
         html.Hr(style={"borderColor": "#444"}),
 
+        # Panel: Positions
+        html.Div([
+            html.H5("POSITIONS", className="mb-3",
+                     style={"color": COLOR_HEADER, "letterSpacing": "0.1em", "fontWeight": "600"}),
+            dbc.Row(id="positions-cards"),
+        ], className="mb-4"),
+
+        html.Hr(style={"borderColor": "#444"}),
+
         # Panel A: Active Signal Board
         html.Div([
             html.H5("ACTIVE SIGNAL BOARD", className="mb-3",
@@ -345,6 +443,7 @@ app.layout = build_layout
 @app.callback(
     Output("stats-bar", "children"),
     Output("watchlist-cards", "children"),
+    Output("positions-cards", "children"),
     Output("signal-table-container", "children"),
     Output("changelog-table-container", "children"),
     Output("footer-text", "children"),
@@ -358,6 +457,13 @@ def refresh_dashboard(_n):
     # Watchlist cards
     wl = fetch_watchlist()
     wl_cards = [make_watchlist_card(r) for r in wl]
+
+    # Position cards
+    pos_data = fetch_positions()
+    pos_cards = [make_position_card(p) for p in pos_data] if pos_data else [
+        dbc.Col(html.Div("No positions available (workbook may not be open)",
+                         style={"color": "#666", "fontStyle": "italic"}))
+    ]
 
     # Signal board table
     state_data = fetch_current_state()
@@ -425,7 +531,7 @@ def refresh_dashboard(_n):
     from datetime import datetime
     footer = f"Last refresh: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}  |  Data: {stats['date_min']} to {stats['date_max']}  |  Auto-refresh: {REFRESH_INTERVAL_MS // 1000}s"
 
-    return stats_bar, wl_cards, signal_table, changelog_table, footer
+    return stats_bar, wl_cards, pos_cards, signal_table, changelog_table, footer
 
 
 # ---------------------------------------------------------------------------
