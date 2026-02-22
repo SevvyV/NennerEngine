@@ -6,3 +6,6 @@ __pycache__/
 *.log
 .env
 .claude/
+.launcher_pids
+performance_reports/
+nul
