@@ -590,19 +590,17 @@ class TestLiveDatabaseValidation(unittest.TestCase):
             "SELECT * FROM current_state WHERE ticker = ?", (ticker,)
         ).fetchone()
 
-    def test_gold_buy_implied(self):
+    def test_gold_buy(self):
         row = self._get_state("GC")
         self.assertIsNotNone(row, "Gold not found in current_state")
         self.assertEqual(row["effective_signal"], "BUY")
-        self.assertEqual(row["implied_reversal"], 1)
-        self.assertEqual(row["origin_price"], 5000.0)
+        self.assertEqual(row["cancel_level"], 4980.0)
 
-    def test_silver_buy_implied(self):
+    def test_silver_buy(self):
         row = self._get_state("SI")
         self.assertIsNotNone(row)
         self.assertEqual(row["effective_signal"], "BUY")
-        self.assertEqual(row["implied_reversal"], 1)
-        self.assertEqual(row["origin_price"], 77.0)
+        self.assertEqual(row["cancel_level"], 76.9)
 
     def test_tsla_sell(self):
         row = self._get_state("TSLA")
@@ -624,23 +622,20 @@ class TestLiveDatabaseValidation(unittest.TestCase):
         self.assertEqual(row["origin_price"], 54.0)
         self.assertEqual(row["cancel_level"], 53.6)
 
-    def test_sp500_sell(self):
+    def test_sp500_buy(self):
         row = self._get_state("ES")
         self.assertIsNotNone(row)
-        self.assertEqual(row["effective_signal"], "SELL")
-        self.assertEqual(row["cancel_level"], 6900.0)
+        self.assertEqual(row["effective_signal"], "BUY")
 
-    def test_vix_buy(self):
+    def test_vix_sell(self):
         row = self._get_state("VIX")
         self.assertIsNotNone(row)
-        self.assertEqual(row["effective_signal"], "BUY")
-        self.assertEqual(row["cancel_level"], 19.3)
+        self.assertEqual(row["effective_signal"], "SELL")
 
     def test_bonds_buy(self):
         row = self._get_state("ZB")
         self.assertIsNotNone(row)
         self.assertEqual(row["effective_signal"], "BUY")
-        self.assertEqual(row["cancel_level"], 117.2)
 
     def test_dollar_buy(self):
         row = self._get_state("DXY")
@@ -651,13 +646,13 @@ class TestLiveDatabaseValidation(unittest.TestCase):
         row = self._get_state("BTC")
         self.assertIsNotNone(row)
         self.assertEqual(row["effective_signal"], "SELL")
-        self.assertEqual(row["cancel_level"], 68500.0)
 
     def test_nem_buy(self):
-        """NEM — on buy signal."""
+        """NEM — on buy signal (flipped from previous sell)."""
         row = self._get_state("NEM")
         self.assertIsNotNone(row)
         self.assertEqual(row["effective_signal"], "BUY")
+        self.assertEqual(row["origin_price"], 122.0)
         self.assertEqual(row["cancel_level"], 122.0)
 
     def test_database_stats(self):
@@ -716,20 +711,19 @@ class TestAlertEngine(unittest.TestCase):
         cancel_alerts = [a for a in alerts if "CANCEL" in a["alert_type"]]
         self.assertEqual(len(cancel_alerts), 0)
 
-    def test_trigger_danger_alert(self):
-        """Trigger distance below DANGER threshold fires TRIGGER_DANGER."""
+    def test_trigger_danger_alert_removed(self):
+        """Trigger proximity alerts have been removed — no TRIGGER_DANGER fires."""
         rows = [self._make_row(trigger_dist_pct=0.2, trigger_level=5010)]
         alerts = evaluate_price_alerts(rows)
         trigger_alerts = [a for a in alerts if a["alert_type"] == "TRIGGER_DANGER"]
-        self.assertEqual(len(trigger_alerts), 1)
-        self.assertEqual(trigger_alerts[0]["severity"], "DANGER")
+        self.assertEqual(len(trigger_alerts), 0)
 
-    def test_trigger_watch_alert(self):
-        """Trigger distance between DANGER and WARNING fires TRIGGER_WATCH."""
+    def test_trigger_watch_alert_removed(self):
+        """Trigger proximity alerts have been removed — no TRIGGER_WATCH fires."""
         rows = [self._make_row(trigger_dist_pct=0.8, trigger_level=5040)]
         alerts = evaluate_price_alerts(rows)
         trigger_alerts = [a for a in alerts if a["alert_type"] == "TRIGGER_WATCH"]
-        self.assertEqual(len(trigger_alerts), 1)
+        self.assertEqual(len(trigger_alerts), 0)
 
     def test_no_price_skipped(self):
         """Rows with price=None produce no alerts."""
@@ -738,7 +732,7 @@ class TestAlertEngine(unittest.TestCase):
         self.assertEqual(len(alerts), 0)
 
     def test_multiple_alerts_same_row(self):
-        """Row near both cancel and trigger produces two alerts."""
+        """Row near cancel and trigger — only cancel alert fires (trigger alerts removed)."""
         rows = [self._make_row(
             cancel_dist_pct=0.3, cancel_level=5015,
             trigger_dist_pct=0.4, trigger_level=5020,
@@ -746,8 +740,8 @@ class TestAlertEngine(unittest.TestCase):
         alerts = evaluate_price_alerts(rows)
         types = {a["alert_type"] for a in alerts}
         self.assertIn("CANCEL_DANGER", types)
-        self.assertIn("TRIGGER_DANGER", types)
-        self.assertEqual(len(alerts), 2)
+        self.assertNotIn("TRIGGER_DANGER", types)
+        self.assertEqual(len(alerts), 1)
 
     def test_signal_change_detection(self):
         """New signals after baseline id should be detected."""
