@@ -1,9 +1,9 @@
 """
 LLM-Based Signal Parser
 ========================
-Replaces the regex-based parser with Claude Haiku for natural language
-understanding of Nenner email signals. Uses the same output schema as
-the legacy parser so downstream code (db.py, imap_client.py) is unchanged.
+Uses Claude Sonnet for natural language understanding of Nenner email
+signals. Uses the same output schema as the legacy parser so downstream
+code (db.py, imap_client.py) is unchanged.
 """
 
 import json
@@ -20,7 +20,7 @@ log = logging.getLogger("nenner")
 # Default model
 # ---------------------------------------------------------------------------
 
-DEFAULT_MODEL = "claude-haiku-4-5-20251001"
+DEFAULT_MODEL = "claude-sonnet-4-5-20250929"
 
 # ---------------------------------------------------------------------------
 # System Prompt — The Signal Interpretation Rulebook
@@ -33,7 +33,7 @@ You are a structured data extraction engine for Charles Nenner's cycle research 
 
 1. There are only two signal types: BUY or SELL. There is never a neutral signal. "Move" signals should be classified as the contextually appropriate BUY or SELL based on direction language.
 2. A signal consists of: signal_type (BUY/SELL) + origin_price + cancel_direction (ABOVE/BELOW) + cancel_level.
-3. When a signal is "cancelled" (price closed beyond the cancel level), it implies an automatic reversal to the opposite direction. The cancel_level becomes the new origin_price for the implied reversal.
+3. CRITICAL — signal_type for CANCELLED signals: When extracting a cancelled signal, signal_type MUST match the ORIGINAL signal that was cancelled, NOT the implied new direction. "Cancelled the sell signal" → signal_type = "SELL", signal_status = "CANCELLED". "Cancelled the buy signal" → signal_type = "BUY", signal_status = "CANCELLED". The downstream system handles reversals automatically. You must NEVER flip the signal_type.
 4. Cancel levels can change between emails. When Nenner writes "(note the change)" it means the cancel level has been updated from a prior email.
 5. Signals are evaluated on the daily close only (4:15 PM ET equities close). The exception is when Nenner specifies an "hourly close" — set uses_hourly_close to 1 in that case.
 6. "Good close" exception: Nenner may say to wait for a "good close" before acting on a cancellation. He says this explicitly when it applies. If he uses "good close" language, the signal remains ACTIVE (not cancelled).
@@ -42,7 +42,7 @@ You are a structured data extraction engine for Charles Nenner's cycle research 
 9. Cycle directions (daily, weekly, monthly, dominant, hourly, longer term) provide timing context. They do NOT change signals. Extract them separately.
 10. When the same instrument appears in multiple sections of the same email, extract each signal occurrence.
 11. These rules are consistent across ALL asset classes (equities, commodities, currencies, crypto, bonds).
-12. A BUY signal has cancel_direction ABOVE (cancelled if price closes above the cancel level). Wait — that's wrong. A BUY signal means you are long. It would be cancelled with a close BELOW the cancel level. A SELL signal means you are short. It would be cancelled with a close ABOVE the cancel level. Extract the cancel_direction exactly as stated in the text.
+12. Cancel direction logic: A BUY signal (long position) is cancelled by a close BELOW the cancel level. A SELL signal (short position) is cancelled by a close ABOVE the cancel level. Always extract the cancel_direction exactly as stated in the email text.
 
 ## Instrument Attribution
 
@@ -70,6 +70,7 @@ CANCELLED signals — the signal was just cancelled:
 - "Cancelled the buy/sell signal from [ORIGIN] with the close above/below [CANCEL]"
 - "Cancelled the buy/sell signal from [ORIGIN] again with the close above/below [CANCEL]"
 - Often followed by a trigger: "A close above/below [LEVEL] will give/resume a new buy/sell"
+- IMPORTANT: For cancelled signals, signal_type = the ORIGINAL signal word. Example: "Cancelled the sell signal from 457 with the close above 457" → signal_type="SELL", signal_status="CANCELLED", origin_price=457, cancel_direction="ABOVE", cancel_level=457. Do NOT flip to BUY.
 
 Price targets:
 - "There is a/an/still/new upside/downside price target at/of [PRICE]"
@@ -207,10 +208,40 @@ def _build_system_prompt() -> str:
     return SYSTEM_PROMPT_TEMPLATE.format(instrument_map=get_instrument_map_json())
 
 
+def _salvage_truncated_json(text: str) -> Optional[dict]:
+    """Attempt to salvage a truncated JSON response by closing open structures."""
+    # Count open braces/brackets
+    open_braces = text.count("{") - text.count("}")
+    open_brackets = text.count("[") - text.count("]")
+
+    # Strip any trailing partial values (comma, partial string, etc.)
+    salvaged = text.rstrip()
+    # Remove trailing comma if present
+    if salvaged.endswith(","):
+        salvaged = salvaged[:-1]
+    # Remove partial key-value pairs (trailing colon or partial string)
+    while salvaged and salvaged[-1] not in "]}\"0123456789nulltruefalse"[-1:]:
+        salvaged = salvaged[:-1].rstrip()
+        if salvaged.endswith(","):
+            salvaged = salvaged[:-1]
+
+    # Close open structures
+    salvaged += "]" * open_brackets + "}" * open_braces
+
+    try:
+        result = json.loads(salvaged)
+        if isinstance(result, dict):
+            return result
+    except json.JSONDecodeError:
+        pass
+    return None
+
+
 def _call_llm(body: str, api_key: str, model: str) -> dict:
     """Call the Anthropic API and return parsed JSON response.
 
     Retries up to 2 times with exponential backoff on transient errors.
+    Uses prompt caching to reduce cost on the system prompt.
     """
     import anthropic
 
@@ -228,17 +259,43 @@ def _call_llm(body: str, api_key: str, model: str) -> dict:
         try:
             message = client.messages.create(
                 model=model,
-                max_tokens=4096,
-                system=system_prompt,
+                max_tokens=16384,
+                system=[{
+                    "type": "text",
+                    "text": system_prompt,
+                    "cache_control": {"type": "ephemeral"},
+                }],
                 messages=[{"role": "user", "content": user_message}],
             )
+
+            # Check for truncation
+            if message.stop_reason == "max_tokens":
+                log.warning(f"Response truncated (stop_reason=max_tokens). "
+                            f"Attempting JSON salvage...")
+                response_text = message.content[0].text if message.content else ""
+                salvaged = _salvage_truncated_json(response_text)
+                if salvaged:
+                    log.info(f"JSON salvage successful: "
+                             f"{len(salvaged.get('signals', []))} signals recovered")
+                    return salvaged
+                log.error(f"JSON salvage failed for truncated response")
+                last_error = RuntimeError("Response truncated and salvage failed")
+                break
+
             response_text = message.content[0].text
+
+            # Log cache performance
+            if hasattr(message, "usage"):
+                usage = message.usage
+                cache_read = getattr(usage, "cache_read_input_tokens", 0)
+                cache_create = getattr(usage, "cache_creation_input_tokens", 0)
+                if cache_read or cache_create:
+                    log.debug(f"Cache: read={cache_read}, created={cache_create}")
 
             # Strip markdown code fences if present
             response_text = response_text.strip()
             if response_text.startswith("```"):
                 lines = response_text.split("\n")
-                # Remove first and last fence lines
                 if lines[0].startswith("```"):
                     lines = lines[1:]
                 if lines and lines[-1].strip() == "```":
@@ -250,8 +307,13 @@ def _call_llm(body: str, api_key: str, model: str) -> dict:
         except json.JSONDecodeError as e:
             log.error(f"LLM returned invalid JSON (attempt {attempt+1}): {e}")
             log.debug(f"Raw response: {response_text[:500]}")
+            # Try salvage before giving up
+            salvaged = _salvage_truncated_json(response_text)
+            if salvaged:
+                log.info(f"JSON salvage successful on decode error: "
+                         f"{len(salvaged.get('signals', []))} signals recovered")
+                return salvaged
             last_error = e
-            # Don't retry JSON errors — the model gave a bad response
             break
 
         except Exception as e:

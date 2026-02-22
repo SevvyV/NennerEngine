@@ -71,6 +71,7 @@ from .positions import (
 )
 
 from .alerts import (
+    AlertConfig,
     evaluate_price_alerts,
     detect_signal_changes,
     run_monitor,
@@ -78,6 +79,8 @@ from .alerts import (
     send_toast,
     send_telegram,
     dispatch_alert,
+    is_intraday_ticker,
+    build_scheduled_summary,
     PROXIMITY_DANGER_PCT,
     PROXIMITY_WARNING_PCT,
     ALERT_COOLDOWN_MINUTES,
@@ -93,6 +96,12 @@ from .auto_cancel import (
 from .email_scheduler import (
     EmailScheduler,
     run_email_check,
+)
+from .trade_stats import (
+    extract_trades_from_db,
+    compute_instrument_stats,
+    get_profit_factor,
+    build_top_trades_message,
 )
 
 __all__ = [
@@ -124,10 +133,15 @@ __all__ = [
     "read_positions", "parse_option_code", "compute_position_pnl",
     "get_positions_with_signal_context", "get_held_tickers",
     # Alerts
+    "AlertConfig",
     "evaluate_price_alerts", "detect_signal_changes",
     "run_monitor", "show_alert_history",
     "send_toast", "send_telegram", "dispatch_alert",
+    "is_intraday_ticker", "build_scheduled_summary",
     "PROXIMITY_DANGER_PCT", "PROXIMITY_WARNING_PCT", "ALERT_COOLDOWN_MINUTES",
     # Email Scheduler
     "EmailScheduler", "run_email_check",
+    # Trade Stats
+    "extract_trades_from_db", "compute_instrument_stats",
+    "get_profit_factor", "build_top_trades_message",
 ]

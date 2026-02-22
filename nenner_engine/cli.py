@@ -13,7 +13,7 @@ from .db import init_db, migrate_db, compute_current_state
 from .imap_client import backfill_imap, check_new_emails, import_eml_folder
 from .reporting import show_status, show_history, export_csv
 from .prices import fetch_yfinance_daily, get_prices_with_signal_context
-from .alerts import run_monitor, show_alert_history
+from .alerts import run_monitor, show_alert_history, AlertConfig
 from .auto_cancel import check_auto_cancellations
 from .positions import read_positions, get_positions_with_signal_context
 
@@ -176,6 +176,8 @@ Examples:
                         help="Show trade positions with dollar P/L")
     parser.add_argument("--auto-cancel", action="store_true",
                         help="Check daily closes against cancel levels and auto-cancel breached signals")
+    parser.add_argument("--show-config", action="store_true",
+                        help="Show current alert configuration")
     parser.add_argument("--db", type=str, default=default_db,
                         help=f"Database path (default: {default_db})")
 
@@ -185,7 +187,24 @@ Examples:
     conn = init_db(args.db)
     migrate_db(conn)
 
-    if args.auto_cancel:
+    if args.show_config:
+        cfg = AlertConfig()
+        print("\n  ALERT CONFIGURATION")
+        print("  " + "=" * 50)
+        print(f"  Windows Toast (audio):  {'ENABLED' if cfg.ENABLE_TOAST else 'DISABLED'}")
+        print(f"  Telegram Bot:           {'ENABLED' if cfg.ENABLE_TELEGRAM else 'DISABLED'}")
+        print(f"\n  Scheduled Summary Times:")
+        for t in cfg.SCHEDULED_ALERT_TIMES:
+            print(f"    - {t.strftime('%I:%M %p')}")
+        print(f"  Schedule Tolerance:     {cfg.SCHEDULE_TOLERANCE_MINUTES} minutes")
+        print(f"\n  Intraday Alert Tickers ({len(cfg.INTRADAY_TICKERS)}):")
+        for ticker in sorted(cfg.INTRADAY_TICKERS):
+            print(f"    - {ticker}")
+        print(f"\n  Intraday Asset Classes:")
+        for ac in sorted(cfg.INTRADAY_ASSET_CLASSES):
+            print(f"    - {ac}")
+        print()
+    elif args.auto_cancel:
         results = check_auto_cancellations(conn)
         if results:
             print(f"\nAuto-cancelled {len(results)} signal(s):")
@@ -199,7 +218,7 @@ Examples:
     elif args.positions:
         _show_positions(conn)
     elif args.monitor:
-        run_monitor(conn, interval=args.interval)
+        run_monitor(conn, interval=args.interval, config=AlertConfig())
     elif args.alert_history:
         show_alert_history(conn)
     elif args.rebuild_state:
