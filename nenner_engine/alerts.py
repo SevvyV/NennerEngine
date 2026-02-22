@@ -4,6 +4,13 @@ Alert Engine
 Monitors signal state and price data, fires notifications when
 alert conditions are met. Supports Windows toast and Telegram channels.
 
+Configuration:
+  - Channel enable/disable (ENABLE_TOAST, ENABLE_TELEGRAM)
+  - Scheduled summary alerts at specific times (SCHEDULED_ALERT_TIMES)
+  - Intraday ticker filter (INTRADAY_TICKERS) -- only these tickers
+    fire proximity alerts between scheduled summaries
+  - All settings are in the AlertConfig class below
+
 Usage:
     python -m nenner_engine --monitor
     python -m nenner_engine --monitor --interval 30
@@ -18,7 +25,7 @@ import sqlite3
 import time
 import urllib.parse
 import urllib.request
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time as dt_time
 from typing import Optional
 
 log = logging.getLogger("nenner")
@@ -30,6 +37,71 @@ log = logging.getLogger("nenner")
 PROXIMITY_DANGER_PCT = 0.5    # Cancel/trigger distance < 0.5% = DANGER
 PROXIMITY_WARNING_PCT = 1.0   # Cancel/trigger distance < 1.0% = WATCH
 ALERT_COOLDOWN_MINUTES = 60   # 1 hour per ticker per alert_type
+
+
+# ---------------------------------------------------------------------------
+# Alert Configuration
+# ---------------------------------------------------------------------------
+
+class AlertConfig:
+    """Central configuration for alert channels, schedules, and filters.
+
+    Modify these settings to control notification behavior.
+    """
+
+    # --- Channel Enable/Disable ---
+    ENABLE_TOAST = False         # Windows toast notifications (with audio) -- DISABLED
+    ENABLE_TELEGRAM = True       # Telegram bot notifications -- ENABLED
+
+    # --- Scheduled Summary Alerts ---
+    # Full portfolio summary sent via Telegram at these times (24hr format).
+    # These fire regardless of ticker filters.
+    SCHEDULED_ALERT_TIMES = [
+        dt_time(8, 0),           # 8:00 AM  -- pre-market overview
+        dt_time(9, 35),          # 9:35 AM  -- 5 min after US open
+        dt_time(12, 0),          # 12:00 PM -- midday check
+        dt_time(16, 15),         # 4:15 PM  -- post-close summary
+    ]
+
+    # Tolerance window: scheduled alert fires if current time is within
+    # this many minutes of a scheduled time (to handle polling intervals).
+    SCHEDULE_TOLERANCE_MINUTES = 2
+
+    # --- Intraday Alert Ticker Filter ---
+    # Between scheduled summaries, ONLY these tickers fire real-time
+    # proximity alerts (cancel/trigger distance warnings).
+    # This covers: Equity Indices, Equity ETFs, Single Stocks, and SOYB.
+    #
+    # Asset classes included:
+    #   - Equity Index:          ES, NQ, YM, NYFANG, TSX, VIX
+    #   - Equity Index (Europe): AEX, DAX, FTSE
+    #   - Single Stock:          AAPL, BAC, GOOG, MSFT, NVDA, TSLA
+    #   - Volatility:            VIX (already above)
+    #   - Agriculture ETF:       SOYB (per user request)
+    INTRADAY_TICKERS = {
+        # US Equity Indices
+        "ES", "NQ", "YM", "NYFANG",
+        # International Equity Indices
+        "TSX", "AEX", "DAX", "FTSE",
+        # Volatility
+        "VIX",
+        # Single Stocks
+        "AAPL", "BAC", "GOOG", "MSFT", "NVDA", "TSLA",
+        # Equity ETFs
+        "QQQ",
+        # Special request: SOYB
+        "SOYB",
+    }
+
+    # --- Intraday Asset Class Filter (alternative broad filter) ---
+    # If a ticker is NOT in INTRADAY_TICKERS, we also check if its
+    # asset_class starts with any of these prefixes.
+    INTRADAY_ASSET_CLASSES = {
+        "Equity Index",
+        "Equity Index (Europe)",
+        "Single Stock",
+        "Volatility",
+    }
 
 # ---------------------------------------------------------------------------
 # Environment / Credentials
@@ -213,24 +285,9 @@ def evaluate_price_alerts(rows: list[dict]) -> list[dict]:
                 ))
 
         # --- Trigger proximity ---
-        trigger_dist = r.get("trigger_dist_pct")
-        if trigger_dist is not None:
-            abs_dist = abs(trigger_dist)
-            trigger_level = r.get("trigger_level")
-            trigger_str = f"{trigger_level:,.2f}" if trigger_level else "?"
-
-            if abs_dist < PROXIMITY_DANGER_PCT:
-                alerts.append(_make_alert(
-                    r, "TRIGGER_DANGER", "DANGER",
-                    f"DANGER {ticker} ({instrument}) trigger {abs_dist:.2f}% away! "
-                    f"Price={price:,.2f} Trigger={trigger_str}"
-                ))
-            elif abs_dist < PROXIMITY_WARNING_PCT:
-                alerts.append(_make_alert(
-                    r, "TRIGGER_WATCH", "WARNING",
-                    f"WATCH {ticker} ({instrument}) trigger {abs_dist:.2f}% away. "
-                    f"Price={price:,.2f} Trigger={trigger_str}"
-                ))
+        # REMOVED: TRIGGER_DANGER and TRIGGER_WATCH alerts are no longer useful
+        # because average gains per trade are too close to trigger levels.
+        # Cancel proximity alerts are retained as they indicate risk of reversal.
 
     return alerts
 
@@ -334,11 +391,16 @@ def log_alert(conn: sqlite3.Connection, alert: dict, channels: list[str]):
 def dispatch_alert(alert: dict, cooldown_tracker: dict,
                    conn: sqlite3.Connection,
                    telegram_token: Optional[str] = None,
-                   telegram_chat_id: Optional[str] = None) -> bool:
-    """Check cooldown, send via all channels, log to DB.
+                   telegram_chat_id: Optional[str] = None,
+                   config: Optional[AlertConfig] = None) -> bool:
+    """Check cooldown, send via enabled channels, log to DB.
 
+    Respects AlertConfig for channel enable/disable.
     Returns True if alert was actually sent (not suppressed by cooldown).
     """
+    if config is None:
+        config = AlertConfig()
+
     ticker = alert["ticker"]
     alert_type = alert["alert_type"]
 
@@ -348,13 +410,14 @@ def dispatch_alert(alert: dict, cooldown_tracker: dict,
 
     channels_sent = []
 
-    # Windows toast
-    title = f"Nenner {alert['severity']}: {ticker}"
-    if send_toast(title, alert["message"], alert["severity"]):
-        channels_sent.append("toast")
+    # Windows toast -- only if enabled in config
+    if config.ENABLE_TOAST:
+        title = f"Nenner {alert['severity']}: {ticker}"
+        if send_toast(title, alert["message"], alert["severity"]):
+            channels_sent.append("toast")
 
-    # Telegram
-    if telegram_token and telegram_chat_id:
+    # Telegram -- only if enabled in config
+    if config.ENABLE_TELEGRAM and telegram_token and telegram_chat_id:
         tg_msg = f"<b>{alert['severity']}</b>: {alert['message']}"
         if send_telegram(tg_msg, telegram_token, telegram_chat_id):
             channels_sent.append("telegram")
@@ -370,6 +433,180 @@ def dispatch_alert(alert: dict, cooldown_tracker: dict,
     log.info(f"ALERT [{alert['severity']}] {alert['message']} -> {channels_str}")
 
     return True
+
+
+# ---------------------------------------------------------------------------
+# Intraday Ticker Filtering
+# ---------------------------------------------------------------------------
+
+def is_intraday_ticker(ticker: str, asset_class: str = "",
+                       config: Optional[AlertConfig] = None) -> bool:
+    """Check if a ticker qualifies for intraday (between-schedule) alerts.
+
+    Returns True if the ticker is in INTRADAY_TICKERS or its asset_class
+    matches INTRADAY_ASSET_CLASSES.
+    """
+    if config is None:
+        config = AlertConfig()
+
+    if ticker in config.INTRADAY_TICKERS:
+        return True
+
+    for ac_prefix in config.INTRADAY_ASSET_CLASSES:
+        if asset_class.startswith(ac_prefix):
+            return True
+
+    return False
+
+
+# ---------------------------------------------------------------------------
+# Scheduled Summary Alerts
+# ---------------------------------------------------------------------------
+
+def _is_scheduled_time(now: datetime, config: AlertConfig,
+                       fired_times: set) -> bool:
+    """Check if current time matches any scheduled alert time.
+
+    Args:
+        now: Current datetime.
+        config: AlertConfig instance.
+        fired_times: Set of already-fired (date, time) tuples to prevent dupes.
+
+    Returns True if we should fire a scheduled summary now.
+    """
+    current_time = now.time()
+    today = now.date()
+    tolerance = timedelta(minutes=config.SCHEDULE_TOLERANCE_MINUTES)
+
+    for sched_time in config.SCHEDULED_ALERT_TIMES:
+        sched_dt = datetime.combine(today, sched_time)
+        diff = abs(now - sched_dt)
+        key = (today, sched_time)
+
+        if diff <= tolerance and key not in fired_times:
+            return True
+
+    return False
+
+
+def _get_matching_schedule_time(now: datetime, config: AlertConfig) -> Optional[dt_time]:
+    """Return the scheduled time that matches the current time, or None."""
+    today = now.date()
+    tolerance = timedelta(minutes=config.SCHEDULE_TOLERANCE_MINUTES)
+
+    for sched_time in config.SCHEDULED_ALERT_TIMES:
+        sched_dt = datetime.combine(today, sched_time)
+        if abs(now - sched_dt) <= tolerance:
+            return sched_time
+    return None
+
+
+def build_scheduled_summary(conn: sqlite3.Connection,
+                            rows: list[dict]) -> str:
+    """Build a comprehensive portfolio summary message for scheduled alerts.
+
+    Args:
+        conn: Database connection.
+        rows: Output of get_prices_with_signal_context().
+
+    Returns:
+        HTML-formatted summary string for Telegram.
+    """
+    now = datetime.now()
+    time_str = now.strftime("%I:%M %p")
+    date_str = now.strftime("%b %d, %Y")
+
+    lines = [
+        f"<b>NennerEngine Portfolio Summary</b>",
+        f"{date_str} at {time_str}",
+        "",
+    ]
+
+    # Categorize signals
+    buy_signals = []
+    sell_signals = []
+    danger_alerts = []
+    watch_alerts = []
+
+    for r in rows:
+        ticker = r["ticker"]
+        signal = r.get("effective_signal", "")
+        price = r.get("price")
+        origin = r.get("origin_price")
+        cancel_dist = r.get("cancel_dist_pct")
+        pnl_pct = r.get("pnl_pct")
+
+        if price is None:
+            continue
+
+        entry = {
+            "ticker": ticker,
+            "instrument": r.get("instrument", ticker),
+            "signal": signal,
+            "price": price,
+            "origin": origin,
+            "pnl_pct": pnl_pct,
+            "cancel_dist": cancel_dist,
+        }
+
+        if signal == "BUY":
+            buy_signals.append(entry)
+        elif signal == "SELL":
+            sell_signals.append(entry)
+
+        # Check proximity
+        if cancel_dist is not None:
+            abs_dist = abs(cancel_dist)
+            if abs_dist < PROXIMITY_DANGER_PCT:
+                danger_alerts.append(entry)
+            elif abs_dist < PROXIMITY_WARNING_PCT:
+                watch_alerts.append(entry)
+
+    # Danger alerts first
+    if danger_alerts:
+        lines.append("<b>!! DANGER ALERTS !!</b>")
+        for a in danger_alerts:
+            pnl_str = f"{a['pnl_pct']:+.1f}%" if a["pnl_pct"] is not None else "N/A"
+            lines.append(
+                f"  {a['ticker']} ({a['instrument']}) - "
+                f"Cancel {abs(a['cancel_dist']):.2f}% away | "
+                f"P/L: {pnl_str}"
+            )
+        lines.append("")
+
+    if watch_alerts:
+        lines.append("<b>Watch List (approaching cancel):</b>")
+        for a in watch_alerts:
+            pnl_str = f"{a['pnl_pct']:+.1f}%" if a["pnl_pct"] is not None else "N/A"
+            lines.append(
+                f"  {a['ticker']} - {abs(a['cancel_dist']):.2f}% to cancel | "
+                f"P/L: {pnl_str}"
+            )
+        lines.append("")
+
+    # BUY signals summary
+    lines.append(f"<b>Active BUY Signals ({len(buy_signals)}):</b>")
+    buy_signals.sort(key=lambda x: x.get("pnl_pct") or 0, reverse=True)
+    for s in buy_signals:
+        pnl_str = f"{s['pnl_pct']:+.1f}%" if s["pnl_pct"] is not None else "N/A"
+        lines.append(f"  {s['ticker']:8s} {s['price']:>10,.2f}  P/L: {pnl_str}")
+
+    lines.append("")
+    lines.append(f"<b>Active SELL Signals ({len(sell_signals)}):</b>")
+    sell_signals.sort(key=lambda x: x.get("pnl_pct") or 0, reverse=True)
+    for s in sell_signals:
+        pnl_str = f"{s['pnl_pct']:+.1f}%" if s["pnl_pct"] is not None else "N/A"
+        lines.append(f"  {s['ticker']:8s} {s['price']:>10,.2f}  P/L: {pnl_str}")
+
+    # Winning/losing count
+    all_sigs = buy_signals + sell_signals
+    winners = sum(1 for s in all_sigs if (s.get("pnl_pct") or 0) > 0)
+    losers = sum(1 for s in all_sigs if (s.get("pnl_pct") or 0) < 0)
+    lines.append("")
+    lines.append(f"Winners: {winners} | Losers: {losers} | "
+                 f"Total: {len(all_sigs)}")
+
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -417,17 +654,25 @@ def _get_max_signal_id(conn: sqlite3.Connection) -> int:
     return row[0]
 
 
-def run_monitor(conn: sqlite3.Connection, interval: int = 60):
+def run_monitor(conn: sqlite3.Connection, interval: int = 60,
+                config: Optional[AlertConfig] = None):
     """Run the alert monitoring daemon.
 
     Polls every `interval` seconds, evaluates all alert conditions,
     dispatches notifications, and handles graceful shutdown via Ctrl+C.
 
-    Also starts a background email scheduler that:
-      - Checks for new Nenner emails on startup
-      - Checks daily at 8:00 AM Eastern Time
+    Features:
+      - Scheduled summary alerts at configured times (sent to all tickers)
+      - Intraday proximity alerts filtered to equity/ETF tickers + SOYB
+      - Signal change alerts for all tickers (always sent)
+      - Channel enable/disable via AlertConfig
+      - Background email scheduler (checks on startup + daily 8:00 AM ET)
+      - Auto-cancel check at 4:30 PM ET daily
     """
     from .prices import get_prices_with_signal_context
+
+    if config is None:
+        config = AlertConfig()
 
     # Graceful shutdown
     shutdown = False
@@ -441,24 +686,45 @@ def run_monitor(conn: sqlite3.Connection, interval: int = 60):
 
     # Load Telegram config
     tg_token, tg_chat_id = get_telegram_config()
-    if tg_token and tg_chat_id:
-        log.info("Telegram notifications enabled")
+    if config.ENABLE_TELEGRAM and tg_token and tg_chat_id:
+        log.info("Telegram notifications ENABLED")
         send_telegram(
-            "<b>NennerEngine</b> alert monitor started.",
+            "<b>NennerEngine</b> alert monitor started.\n\n"
+            f"<b>Channels:</b> Toast={'ON' if config.ENABLE_TOAST else 'OFF'}, "
+            f"Telegram=ON\n"
+            f"<b>Scheduled alerts:</b> "
+            + ", ".join(t.strftime("%I:%M %p") for t in config.SCHEDULED_ALERT_TIMES)
+            + "\n"
+            f"<b>Intraday tickers:</b> {', '.join(sorted(config.INTRADAY_TICKERS))}",
             tg_token, tg_chat_id,
         )
-    else:
-        log.info("Telegram not configured (set TELEGRAM_BOT_TOKEN and "
+    elif config.ENABLE_TELEGRAM:
+        log.info("Telegram ENABLED but not configured (set TELEGRAM_BOT_TOKEN and "
                  "TELEGRAM_CHAT_ID in .env)")
         print(TELEGRAM_SETUP_GUIDE)
+    else:
+        log.info("Telegram notifications DISABLED in config")
 
-    # Check winotify availability
+    if config.ENABLE_TOAST:
+        try:
+            import winotify  # noqa: F401
+            log.info("Windows toast notifications ENABLED")
+        except ImportError:
+            log.warning("winotify not installed -- pip install winotify "
+                        "(toast notifications disabled)")
+    else:
+        log.info("Windows toast notifications DISABLED in config")
+
+    # Build asset_class lookup from database for intraday filtering
+    asset_class_lookup = {}
     try:
-        import winotify  # noqa: F401
-        log.info("Windows toast notifications enabled")
-    except ImportError:
-        log.warning("winotify not installed -- pip install winotify "
-                    "(toast notifications disabled)")
+        ac_rows = conn.execute(
+            "SELECT ticker, asset_class FROM current_state"
+        ).fetchall()
+        for r in ac_rows:
+            asset_class_lookup[r["ticker"]] = r["asset_class"]
+    except Exception:
+        pass
 
     # --- Start email scheduler (checks on launch + daily 8 AM ET) ---
     email_sched = None
@@ -479,12 +745,16 @@ def run_monitor(conn: sqlite3.Connection, interval: int = 60):
     # Initialize state
     cooldown_tracker: dict[tuple[str, str], datetime] = {}
     last_signal_id = _get_max_signal_id(conn)
+    fired_schedule_times: set[tuple] = set()  # (date, time) of fired summaries
 
     log.info(f"Alert monitor started. Interval={interval}s, "
              f"baseline signal_id={last_signal_id}")
     log.info(f"Thresholds: DANGER<{PROXIMITY_DANGER_PCT}% "
              f"WATCH<{PROXIMITY_WARNING_PCT}% | "
              f"Cooldown={ALERT_COOLDOWN_MINUTES}min")
+    log.info(f"Scheduled times: "
+             + ", ".join(t.strftime("%H:%M") for t in config.SCHEDULED_ALERT_TIMES))
+    log.info(f"Intraday tickers: {sorted(config.INTRADAY_TICKERS)}")
 
     check_count = 0
     total_alerts = 0
@@ -493,7 +763,8 @@ def run_monitor(conn: sqlite3.Connection, interval: int = 60):
     while not shutdown:
         try:
             check_count += 1
-            log.info(f"--- Alert check #{check_count} ---")
+            now = datetime.now()
+            log.info(f"--- Alert check #{check_count} at {now.strftime('%H:%M:%S')} ---")
 
             # 0. Auto-cancel check at 4:30 PM ET (once per day)
             try:
@@ -521,22 +792,65 @@ def run_monitor(conn: sqlite3.Connection, interval: int = 60):
                             f"Now {c['new_signal']}."
                         )
                         dispatch_alert(auto_alert, cooldown_tracker, conn,
-                                       tg_token, tg_chat_id)
+                                       tg_token, tg_chat_id, config)
                         total_alerts += 1
             except Exception as e:
                 log.error(f"Auto-cancel check failed: {e}", exc_info=True)
 
-            # 1. Price-based alerts (cancel/trigger proximity)
+            # 1. Fetch price context for all instruments
             rows = get_prices_with_signal_context(conn, try_t1=True)
+
+            # 2. Check if this is a scheduled summary time
+            sched_time = _get_matching_schedule_time(now, config)
+            if sched_time and (now.date(), sched_time) not in fired_schedule_times:
+                log.info(f"SCHEDULED SUMMARY firing for {sched_time.strftime('%H:%M')}")
+
+                summary = build_scheduled_summary(conn, rows)
+
+                # Send scheduled summary via Telegram
+                if config.ENABLE_TELEGRAM and tg_token and tg_chat_id:
+                    send_telegram(summary, tg_token, tg_chat_id)
+                    log.info("Scheduled summary sent via Telegram")
+
+                # Mark as fired so it doesn't repeat
+                fired_schedule_times.add((now.date(), sched_time))
+
+                # Log to DB as a scheduled alert
+                sched_alert = {
+                    "ticker": "ALL",
+                    "instrument": "Portfolio",
+                    "alert_type": "SCHEDULED_SUMMARY",
+                    "severity": "INFO",
+                    "message": f"Scheduled summary at {sched_time.strftime('%I:%M %p')}",
+                    "current_price": None,
+                    "cancel_dist_pct": None,
+                    "trigger_dist_pct": None,
+                    "effective_signal": None,
+                }
+                log_alert(conn, sched_alert, ["telegram"])
+                total_alerts += 1
+
+            # 3. Price-based proximity alerts (filtered to intraday tickers)
             price_alerts = evaluate_price_alerts(rows)
 
-            # 2. Signal state change alerts
+            # Filter: only intraday tickers get proximity alerts between schedules
+            filtered_price_alerts = []
+            for alert in price_alerts:
+                ticker = alert["ticker"]
+                ac = asset_class_lookup.get(ticker, "")
+                if is_intraday_ticker(ticker, ac, config):
+                    filtered_price_alerts.append(alert)
+                else:
+                    log.debug(f"Suppressed intraday alert for {ticker} "
+                              f"(not in intraday filter)")
+
+            # 4. Signal state change alerts (ALWAYS sent for ALL tickers)
             signal_alerts, last_signal_id = detect_signal_changes(
                 conn, last_signal_id
             )
 
-            # 3. Enrich alerts with position P/L for held instruments
-            all_alerts = price_alerts + signal_alerts
+            # 5. Enrich alerts with position P/L for held instruments
+            all_alerts = filtered_price_alerts + signal_alerts
             try:
                 from .positions import (
                     read_positions, compute_position_pnl, get_held_tickers,
@@ -544,7 +858,6 @@ def run_monitor(conn: sqlite3.Connection, interval: int = 60):
                 positions = read_positions()
                 held = get_held_tickers(positions)
                 if held:
-                    # Build price lookup from rows
                     price_by_ticker = {
                         r["ticker"]: r.get("price")
                         for r in rows if r.get("price")
@@ -565,10 +878,12 @@ def run_monitor(conn: sqlite3.Connection, interval: int = 60):
                                 )
             except Exception as e:
                 log.debug(f"Position enrichment skipped: {e}")
+
+            # 6. Dispatch alerts
             fired = 0
             for alert in all_alerts:
                 if dispatch_alert(alert, cooldown_tracker, conn,
-                                  tg_token, tg_chat_id):
+                                  tg_token, tg_chat_id, config):
                     fired += 1
 
             total_alerts += fired
@@ -595,7 +910,7 @@ def run_monitor(conn: sqlite3.Connection, interval: int = 60):
 
     log.info(f"Alert monitor stopped. {check_count} checks, "
              f"{total_alerts} alerts fired.")
-    if tg_token and tg_chat_id:
+    if config.ENABLE_TELEGRAM and tg_token and tg_chat_id:
         send_telegram(
             "<b>NennerEngine</b> alert monitor stopped.",
             tg_token, tg_chat_id,
