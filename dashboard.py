@@ -6,7 +6,8 @@ Run: python dashboard.py [--port PORT] [--db PATH]
 
 Automatically checks for new Nenner emails:
   - On dashboard startup (immediate)
-  - Every day at 8:00 AM Eastern Time
+  - Every 30 minutes from 8:00–11:00 AM Eastern Time
+  - On manual refresh button click
 """
 
 import argparse
@@ -17,6 +18,8 @@ import dash
 from dash import dash_table, dcc, html
 import dash_bootstrap_components as dbc
 from dash.dependencies import Input, Output
+
+from nenner_engine.trade_stats import compute_instrument_stats
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -50,13 +53,14 @@ def get_db() -> sqlite3.Connection:
 # ---------------------------------------------------------------------------
 
 def fetch_current_state():
-    """Fetch all current signal states."""
+    """Fetch current signal states, excluding stale signals (>3 months old)."""
     conn = get_db()
     rows = conn.execute("""
         SELECT ticker, instrument, asset_class, effective_signal,
                origin_price, cancel_direction, cancel_level,
                trigger_level, implied_reversal, last_signal_date
         FROM current_state
+        WHERE last_signal_date >= date('now', '-3 months')
         ORDER BY asset_class, instrument
     """).fetchall()
     conn.close()
@@ -117,15 +121,16 @@ def fetch_positions():
 def fetch_db_stats():
     """Fetch database summary stats."""
     conn = get_db()
+    active_filter = "WHERE last_signal_date >= date('now', '-3 months')"
     stats = {
         "emails": conn.execute("SELECT COUNT(*) FROM emails").fetchone()[0],
         "signals": conn.execute("SELECT COUNT(*) FROM signals").fetchone()[0],
         "cycles": conn.execute("SELECT COUNT(*) FROM cycles").fetchone()[0],
         "targets": conn.execute("SELECT COUNT(*) FROM price_targets").fetchone()[0],
-        "instruments": conn.execute("SELECT COUNT(*) FROM current_state").fetchone()[0],
+        "instruments": conn.execute(f"SELECT COUNT(*) FROM current_state {active_filter}").fetchone()[0],
     }
-    buys = conn.execute("SELECT COUNT(*) FROM current_state WHERE effective_signal='BUY'").fetchone()[0]
-    sells = conn.execute("SELECT COUNT(*) FROM current_state WHERE effective_signal='SELL'").fetchone()[0]
+    buys = conn.execute(f"SELECT COUNT(*) FROM current_state {active_filter} AND effective_signal='BUY'").fetchone()[0]
+    sells = conn.execute(f"SELECT COUNT(*) FROM current_state {active_filter} AND effective_signal='SELL'").fetchone()[0]
     stats["buys"] = buys
     stats["sells"] = sells
     date_range = conn.execute("SELECT MIN(date_sent), MAX(date_sent) FROM emails").fetchone()
@@ -359,6 +364,10 @@ SIGNAL_TABLE_STYLE_CELL = {
     "padding": "6px 10px",
 }
 
+COLOR_PF_GOOD = "#00bc8c"    # green — PF >= 2.0
+COLOR_PF_OK = "#f39c12"      # amber — PF 1.0–2.0
+COLOR_PF_BAD = "#e74c3c"     # red   — PF < 1.0
+
 SIGNAL_TABLE_STYLE_DATA_CONDITIONAL = [
     {
         "if": {"filter_query": '{effective_signal} = "BUY"', "column_id": "effective_signal"},
@@ -377,6 +386,63 @@ SIGNAL_TABLE_STYLE_DATA_CONDITIONAL = [
     {
         "if": {"filter_query": '{implied_reversal} = 1', "column_id": "implied_reversal"},
         "color": COLOR_IMPLIED,
+    },
+    # PF conditional coloring: green >= 2.0, amber 1.0-2.0, red < 1.0
+    {
+        "if": {"filter_query": '{pf} >= 2.0', "column_id": "pf"},
+        "color": COLOR_PF_GOOD,
+        "fontWeight": "bold",
+    },
+    {
+        "if": {"filter_query": '{pf} >= 1.0 && {pf} < 2.0', "column_id": "pf"},
+        "color": COLOR_PF_OK,
+        "fontWeight": "bold",
+    },
+    {
+        "if": {"filter_query": '{pf} < 1.0 && {pf} > 0', "column_id": "pf"},
+        "color": COLOR_PF_BAD,
+        "fontWeight": "bold",
+    },
+    # Win% conditional coloring
+    {
+        "if": {"filter_query": '{win_pct} >= 60', "column_id": "win_pct"},
+        "color": COLOR_PF_GOOD,
+    },
+    {
+        "if": {"filter_query": '{win_pct} >= 40 && {win_pct} < 60', "column_id": "win_pct"},
+        "color": COLOR_PF_OK,
+    },
+    {
+        "if": {"filter_query": '{win_pct} < 40 && {win_pct} > 0', "column_id": "win_pct"},
+        "color": COLOR_PF_BAD,
+    },
+    # Sharpe conditional coloring: >= 0.5 green, 0.2-0.5 amber, < 0.2 red
+    {
+        "if": {"filter_query": '{sharpe} >= 0.5', "column_id": "sharpe"},
+        "color": COLOR_PF_GOOD,
+        "fontWeight": "bold",
+    },
+    {
+        "if": {"filter_query": '{sharpe} >= 0.2 && {sharpe} < 0.5', "column_id": "sharpe"},
+        "color": COLOR_PF_OK,
+    },
+    {
+        "if": {"filter_query": '{sharpe} < 0.2 && {sharpe} != ""', "column_id": "sharpe"},
+        "color": COLOR_PF_BAD,
+    },
+    # Score conditional coloring: >= 50 green, 30-50 amber, < 30 red
+    {
+        "if": {"filter_query": '{score} >= 50', "column_id": "score"},
+        "color": COLOR_PF_GOOD,
+        "fontWeight": "bold",
+    },
+    {
+        "if": {"filter_query": '{score} >= 30 && {score} < 50', "column_id": "score"},
+        "color": COLOR_PF_OK,
+    },
+    {
+        "if": {"filter_query": '{score} < 30 && {score} > 0', "column_id": "score"},
+        "color": COLOR_PF_BAD,
     },
 ]
 
@@ -465,11 +531,20 @@ def build_layout():
 
         html.Hr(style={"borderColor": "#444"}),
 
-        # Panel A: Active Signal Board
+        # Panel A1: Single Stocks
         html.Div([
-            html.H5("ACTIVE SIGNAL BOARD", className="mb-3",
+            html.H5("SINGLE STOCKS", className="mb-3",
                      style={"color": COLOR_HEADER, "letterSpacing": "0.1em", "fontWeight": "600"}),
-            html.Div(id="signal-table-container"),
+            html.Div(id="stocks-table-container"),
+        ], className="mb-4"),
+
+        html.Hr(style={"borderColor": "#444"}),
+
+        # Panel A2: Macro Signals
+        html.Div([
+            html.H5("MACRO SIGNALS", className="mb-3",
+                     style={"color": COLOR_HEADER, "letterSpacing": "0.1em", "fontWeight": "600"}),
+            html.Div(id="macro-table-container"),
         ], className="mb-4"),
 
         html.Hr(style={"borderColor": "#444"}),
@@ -514,13 +589,23 @@ app.layout = build_layout
     Output("stats-bar", "children"),
     Output("watchlist-cards", "children"),
     Output("positions-cards", "children"),
-    Output("signal-table-container", "children"),
+    Output("stocks-table-container", "children"),
+    Output("macro-table-container", "children"),
     Output("changelog-table-container", "children"),
     Output("footer-text", "children"),
     Input("refresh-interval", "n_intervals"),
     Input("refresh-button", "n_clicks"),
 )
 def refresh_dashboard(_n, _btn):
+    # Trigger email check on manual refresh button click
+    ctx = dash.callback_context
+    if ctx.triggered and ctx.triggered[0]["prop_id"] == "refresh-button.n_clicks":
+        if _email_scheduler and _btn:
+            try:
+                _email_scheduler.trigger_now()
+            except Exception as e:
+                print(f"Warning: Manual email check failed: {e}")
+
     # Stats
     stats = fetch_db_stats()
     stats_bar = make_stats_bar(stats)
@@ -536,29 +621,66 @@ def refresh_dashboard(_n, _btn):
                          style={"color": "#666", "fontStyle": "italic"}))
     ]
 
-    # Signal board table
+    # Signal board — split into Single Stocks vs Macro
     state_data = fetch_current_state()
+
+    # Merge Profit Factor + Win% from trade_stats
+    try:
+        conn = get_db()
+        instrument_stats = compute_instrument_stats(conn)
+        conn.close()
+    except Exception:
+        instrument_stats = {}
+
     for row in state_data:
+        # Merge PF, Win%, and quant metrics from trade stats
+        ts = instrument_stats.get(row["ticker"])
+        row["pf"] = ts["profit_factor"] if ts else ""
+        row["win_pct"] = ts["win_rate"] if ts else ""
+        row["sharpe"] = ts["sharpe"] if ts else ""
+        row["score"] = round(ts["composite"] * 100, 1) if ts else ""  # 0-100 scale
+
         row["origin_price"] = f"{row['origin_price']:,.2f}" if row.get("origin_price") else ""
         row["cancel_level"] = f"{row['cancel_level']:,.2f}" if row.get("cancel_level") else ""
         row["trigger_level"] = f"{row['trigger_level']:,.2f}" if row.get("trigger_level") else ""
         row["implied_reversal"] = 1 if row.get("implied_reversal") else 0
 
-    signal_table = dash_table.DataTable(
-        id="signal-board",
-        columns=[
-            {"name": "Ticker", "id": "ticker"},
-            {"name": "Instrument", "id": "instrument"},
-            {"name": "Class", "id": "asset_class"},
-            {"name": "Signal", "id": "effective_signal"},
-            {"name": "From", "id": "origin_price"},
-            {"name": "Cancel Dir", "id": "cancel_direction"},
-            {"name": "Cancel", "id": "cancel_level"},
-            {"name": "Trigger", "id": "trigger_level"},
-            {"name": "Impl", "id": "implied_reversal"},
-            {"name": "Date", "id": "last_signal_date"},
-        ],
-        data=state_data,
+    stocks_data = [r for r in state_data if r.get("asset_class") == "Single Stock"]
+    macro_data = [r for r in state_data if r.get("asset_class") != "Single Stock"]
+
+    signal_columns = [
+        {"name": "Ticker", "id": "ticker"},
+        {"name": "Instrument", "id": "instrument"},
+        {"name": "Class", "id": "asset_class"},
+        {"name": "Signal", "id": "effective_signal"},
+        {"name": "From", "id": "origin_price"},
+        {"name": "Cancel", "id": "cancel_level"},
+        {"name": "Impl", "id": "implied_reversal"},
+        {"name": "Date", "id": "last_signal_date"},
+        {"name": "PF", "id": "pf", "type": "numeric"},
+        {"name": "Win%", "id": "win_pct", "type": "numeric"},
+        {"name": "Sharpe", "id": "sharpe", "type": "numeric"},
+        {"name": "Score", "id": "score", "type": "numeric"},
+    ]
+
+    stocks_table = dash_table.DataTable(
+        id="stocks-board",
+        columns=signal_columns,
+        data=stocks_data,
+        sort_action="native",
+        filter_action="native",
+        page_size=20,
+        style_header=SIGNAL_TABLE_STYLE_HEADER,
+        style_cell=SIGNAL_TABLE_STYLE_CELL,
+        style_data_conditional=SIGNAL_TABLE_STYLE_DATA_CONDITIONAL,
+        style_table={"overflowX": "auto"},
+        style_as_list_view=True,
+    )
+
+    macro_table = dash_table.DataTable(
+        id="macro-board",
+        columns=signal_columns,
+        data=macro_data,
         sort_action="native",
         filter_action="native",
         page_size=60,
@@ -626,7 +748,7 @@ def refresh_dashboard(_n, _btn):
 
     footer = "  |  ".join(footer_parts)
 
-    return stats_bar, wl_cards, pos_cards, signal_table, changelog_table, footer
+    return stats_bar, wl_cards, pos_cards, stocks_table, macro_table, changelog_table, footer
 
 
 # ---------------------------------------------------------------------------
@@ -655,9 +777,11 @@ def main():
                 db_path=DB_PATH,
                 check_on_start=True,
                 daily_check=True,
+                interval_minutes=30,
+                interval_window=(8, 11),  # 8:00-11:00 AM ET
             )
             _email_scheduler.start()
-            print("Email scheduler started (checks on launch + daily 8:00 AM ET)")
+            print("Email scheduler started (on launch + every 30min 8-11AM ET + manual refresh)")
         except Exception as e:
             print(f"Warning: Email scheduler failed to start: {e}")
             print("Dashboard will run without automatic email checking.")
