@@ -51,7 +51,8 @@ class AlertConfig:
 
     # --- Channel Enable/Disable ---
     ENABLE_TOAST = False         # Windows toast notifications (with audio) -- DISABLED
-    ENABLE_TELEGRAM = True       # Telegram bot notifications -- ENABLED
+    ENABLE_TELEGRAM = False      # Telegram bot notifications -- DISABLED (improvement planned)
+    ENABLE_PROXIMITY_ALERTS = False  # Price proximity alerts (CANCEL_DANGER/WATCH) -- DISABLED
 
     # --- Scheduled Summary Alerts ---
     # Full portfolio summary sent via Telegram at these times (24hr format).
@@ -831,18 +832,19 @@ def run_monitor(conn: sqlite3.Connection, interval: int = 60,
                 total_alerts += 1
 
             # 3. Price-based proximity alerts (filtered to intraday tickers)
-            price_alerts = evaluate_price_alerts(rows)
-
-            # Filter: only intraday tickers get proximity alerts between schedules
             filtered_price_alerts = []
-            for alert in price_alerts:
-                ticker = alert["ticker"]
-                ac = asset_class_lookup.get(ticker, "")
-                if is_intraday_ticker(ticker, ac, config):
-                    filtered_price_alerts.append(alert)
-                else:
-                    log.debug(f"Suppressed intraday alert for {ticker} "
-                              f"(not in intraday filter)")
+            if config.ENABLE_PROXIMITY_ALERTS:
+                price_alerts = evaluate_price_alerts(rows)
+
+                # Filter: only intraday tickers get proximity alerts between schedules
+                for alert in price_alerts:
+                    ticker = alert["ticker"]
+                    ac = asset_class_lookup.get(ticker, "")
+                    if is_intraday_ticker(ticker, ac, config):
+                        filtered_price_alerts.append(alert)
+                    else:
+                        log.debug(f"Suppressed intraday alert for {ticker} "
+                                  f"(not in intraday filter)")
 
             # 4. Signal state change alerts (ALWAYS sent for ALL tickers)
             signal_alerts, last_signal_id = detect_signal_changes(

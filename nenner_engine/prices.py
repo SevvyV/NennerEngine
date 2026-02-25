@@ -93,7 +93,6 @@ YFINANCE_MAP: dict[str, str | None] = {
     "TSLA":     "TSLA",
     "AMZN":     "AMZN",
     "MMM":      "MMM",
-    "AXP":      "AXP",
     "C":        "C",
     "GS":       "GS",
     "QQQ":      "QQQ",
@@ -184,7 +183,6 @@ LSEG_RIC_MAP: dict[str, str | None] = {
     "TSLA":     "TSLA",
     "AMZN":     "AMZN",
     "MMM":      "MMM",
-    "AXP":      "AXP",
     "C":        "C",
     "GS":       "GS",
     "QQQ":      "QQQ",
@@ -199,14 +197,16 @@ _RIC_REVERSE = {v: k for k, v in LSEG_RIC_MAP.items() if v is not None}
 # T1 / xlwings Configuration
 # ---------------------------------------------------------------------------
 
-T1_WORKBOOK = (
-    r"C:\Users\sevag\OneDrive - VARTANIAN SEVAG\VCM_RIA"
-    r"\VARTANIAN CAPITAL MANAGEMENT\Spreadsheets\TSLA_Options.xlsm"
-)
+T1_WORKBOOK = r"E:\AI_Workspace\DataCenter\Nenner_DataCenter.xlsm"
 T1_SHEET = "Nenner_Stock"
 T1_RIC_COL = "B"       # Column containing the RIC / ticker
 T1_PRICE_COL = "C"     # Column containing the live price (RTD BID)
 T1_DATA_START_ROW = 5  # First data row (after headers)
+
+# Session-level T1 state: once we detect the workbook isn't open,
+# we disable T1 for the rest of this process and send one email.
+_t1_disabled_for_session: bool = False
+_t1_email_sent: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -395,26 +395,85 @@ def backfill_yfinance(conn: sqlite3.Connection,
 # xlwings / T1 Bridge
 # ---------------------------------------------------------------------------
 
+def _is_workbook_open() -> bool:
+    """Check if T1_WORKBOOK is already open in a running Excel instance.
+
+    Iterates through running Excel apps without launching a new one.
+    Returns False if xlwings isn't installed or no Excel is running.
+    """
+    try:
+        import xlwings as xw
+        for app in xw.apps:
+            for wb in app.books:
+                if wb.fullname.lower() == T1_WORKBOOK.lower():
+                    return True
+    except Exception:
+        pass
+    return False
+
+
+def _send_t1_open_email():
+    """Send a one-time email asking user to open the T1 workbook.
+
+    Uses the existing Gmail SMTP infrastructure from stock_report.
+    Only sends once per session (tracked by _t1_email_sent flag).
+    """
+    global _t1_email_sent
+    if _t1_email_sent:
+        return
+    try:
+        from .stock_report import send_email
+        send_email(
+            subject="NennerEngine: Please open Nenner_DataCenter.xlsm",
+            html_body=(
+                "<p>NennerEngine tried to read T1 live prices but the workbook "
+                "is not open in Excel.</p>"
+                f"<p>Please open: <b>{T1_WORKBOOK}</b></p>"
+                "<p>T1 price fetching is disabled for this session. "
+                "Restart the engine after opening the workbook to re-enable "
+                "live prices.</p>"
+            ),
+        )
+        _t1_email_sent = True
+        log.info("Sent email notification: T1 workbook not open")
+    except Exception as e:
+        log.error(f"Failed to send T1 open-workbook email: {e}")
+
+
 def read_t1_prices() -> dict[str, float]:
     """Read real-time prices from the T1/LSEG Excel workbook via xlwings.
 
     Reads the Nenner_Stock sheet: column B (RIC) → column C (price).
     Maps LSEG RICs back to canonical tickers.
 
+    If the workbook is not already open, sends a one-time email notification
+    and disables T1 for the rest of this session (no auto-launch of Excel).
+
     Returns:
         {canonical_ticker: price} dict. Empty dict if workbook unavailable.
     """
+    global _t1_disabled_for_session
+    if _t1_disabled_for_session:
+        return {}
+
     try:
         import xlwings as xw
     except ImportError:
         log.debug("xlwings not installed — T1 bridge unavailable")
         return {}
 
+    if not _is_workbook_open():
+        log.info("T1 workbook not open — disabling T1 for this session")
+        _t1_disabled_for_session = True
+        _send_t1_open_email()
+        return {}
+
+    # Workbook IS already open — safe to connect (won't launch Excel)
     try:
         wb = xw.Book(T1_WORKBOOK)
         ws = wb.sheets[T1_SHEET]
     except Exception as e:
-        log.debug(f"Cannot open T1 workbook: {e}")
+        log.debug(f"Cannot read T1 workbook: {e}")
         return {}
 
     prices: dict[str, float] = {}
@@ -501,7 +560,7 @@ def setup_t1_sheet():
         ("Single Stocks", [
             ("AAPL", "AAPL"), ("GOOG", "GOOG"), ("BAC", "BAC"),
             ("MSFT", "MSFT"), ("NVDA", "NVDA"), ("TSLA", "TSLA"),
-            ("AMZN", "AMZN"), ("MMM", "MMM"), ("AXP", "AXP"),
+            ("AMZN", "AMZN"), ("MMM", "MMM"),
             ("C", "C"), ("GS", "GS"), ("NEM", "NEM"),
         ]),
         ("Precious Metals", [
