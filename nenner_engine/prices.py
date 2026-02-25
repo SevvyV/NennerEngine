@@ -113,7 +113,7 @@ _YF_REVERSE = {v: k for k, v in YFINANCE_MAP.items() if v is not None}
 LSEG_RIC_MAP: dict[str, str | None] = {
     # Equity Indices (futures)
     "ES":       "ES/1",
-    "NQ":       "NQ/1",
+    "NQ":       "NQ/1-CM,USD,NORM",
     "YM":       "D./1",                 # Dow Jones mini uses "D." as the LSEG root
     # Equity Indices (cash index) — corrected to user's T1 entitlements
     "NYFANG":   "NYFANG-P",
@@ -140,11 +140,11 @@ LSEG_RIC_MAP: dict[str, str | None] = {
     # Energy (ETFs)
     "USO":      "USO",
     "UNG":      "UNG",
-    # Agriculture (futures) — #NT/FND, not in current entitlements
-    "ZC":       "C./1",
-    "ZS":       "S./1",
-    "ZW":       "W./1",
-    "LBS":      "LBS/1",
+    # Agriculture (futures) — updated to match Nenner_DataCenter RICs
+    "ZC":       "ZG/1",
+    "ZS":       "ZK/1",
+    "ZW":       "ZW/H26",       # contract-specific — needs manual roll
+    "LBS":      "LBR/1",
     # Agriculture (ETFs)
     "CORN":     "CORN",
     "SOYB":     "SOYB",
@@ -157,7 +157,7 @@ LSEG_RIC_MAP: dict[str, str | None] = {
     # Fixed Income (Europe)
     "FGBL":     "FGBL/1",
     # Currencies — all use =-FX suffix
-    "DXY":      "NYICDX-P,USD,NORM",
+    "DXY":      "NYICDX-P",
     "EUR/USD":  "EUR=-FX",
     "FXE":      "FXE",
     "AUD/USD":  "AUD=-FX",
@@ -198,10 +198,55 @@ _RIC_REVERSE = {v: k for k, v in LSEG_RIC_MAP.items() if v is not None}
 # ---------------------------------------------------------------------------
 
 T1_WORKBOOK = r"E:\AI_Workspace\DataCenter\Nenner_DataCenter.xlsm"
-T1_SHEET = "Nenner_Stock"
-T1_RIC_COL = "B"       # Column containing the RIC / ticker
-T1_PRICE_COL = "C"     # Column containing the live price (RTD BID)
-T1_DATA_START_ROW = 5  # First data row (after headers)
+
+# Two-sheet layout in Nenner_DataCenter.xlsm:
+#   Equities_RT    — stocks & ETFs  (col A = ticker, B = BID, E = LAST)
+#   Futures_FX_RT  — futures, FX, indices, crypto, agriculture
+#                    (col A = instrument name, B = RIC, C = BID, E = LAST)
+T1_SHEETS: dict[str, dict] = {
+    "Equities_RT": {
+        "ticker_col": "A",     # Column A = ticker symbol (TSLA, AAPL, etc.)
+        "ric_col": None,       # No RIC column — ticker IS the identifier
+        "bid_col": "B",        # BID price
+        "last_col": "E",       # LAST price (fallback when BID empty/zero)
+        "data_start_row": 5,
+    },
+    "Futures_FX_RT": {
+        "ticker_col": "A",    # Column A = instrument name (human-readable)
+        "ric_col": "B",       # Column B = LSEG RIC
+        "bid_col": "C",       # BID price
+        "last_col": "E",      # LAST price (fallback when BID empty/zero)
+        "data_start_row": 5,
+    },
+}
+
+# Section headers in Futures_FX_RT to skip (these are labels, not data rows).
+# When we hit one, we also skip the column-header row below it.
+_SECTION_HEADERS = {
+    "FUTURES", "FOREIGN EXCHANGE", "INDICES", "CRYPTO & AGRICULTURE",
+    "Instrument",  # column header row
+    "REAL-TIME FUTURES, FX & INDICES",  # sheet title
+    "REAL-TIME EQUITY & ETF QUOTES",    # sheet title
+}
+
+# Instrument name → canonical ticker for Futures_FX_RT rows where
+# column A is a human-readable name and the RIC doesn't reverse-map.
+_INSTRUMENT_NAME_MAP: dict[str, str] = {
+    "Nasdaq 100 E-mini": "NQ",
+    "S&P 500 E-mini": "ES",
+    "Dow E-mini": "YM",
+    "Gold Futures": "GC",
+    "Silver Futures": "SI",
+    "Copper Futures": "HG",
+    "Crude Oil WTI": "CL",
+    "Natural Gas": "NG",
+    "US Treasury Bond": "ZB",
+    "10-Year T-Note": "ZN",
+    "30-Year T-Bond": "ZB",
+    "US Dollar Index Futures": "DXY",
+    "Bitcoin (BTC)": "BTC",
+    "Ethereum (ETH)": "ETH",
+}
 
 # Session-level T1 state: once we detect the workbook isn't open,
 # we disable T1 for the rest of this process and send one email.
@@ -398,14 +443,19 @@ def backfill_yfinance(conn: sqlite3.Connection,
 def _is_workbook_open() -> bool:
     """Check if T1_WORKBOOK is already open in a running Excel instance.
 
+    Compares by filename only (not full path) because OneDrive sync
+    can cause the Excel-reported path to differ from the local path.
+
     Iterates through running Excel apps without launching a new one.
     Returns False if xlwings isn't installed or no Excel is running.
     """
+    import os
+    target_name = os.path.basename(T1_WORKBOOK).lower()
     try:
         import xlwings as xw
         for app in xw.apps:
             for wb in app.books:
-                if wb.fullname.lower() == T1_WORKBOOK.lower():
+                if wb.name.lower() == target_name:
                     return True
     except Exception:
         pass
@@ -440,11 +490,79 @@ def _send_t1_open_email():
         log.error(f"Failed to send T1 open-workbook email: {e}")
 
 
-def read_t1_prices() -> dict[str, float]:
-    """Read real-time prices from the T1/LSEG Excel workbook via xlwings.
+def _resolve_ticker(col_a: str, col_b: str | None) -> str | None:
+    """Resolve canonical ticker from a spreadsheet row.
 
-    Reads the Nenner_Stock sheet: column B (RIC) → column C (price).
-    Maps LSEG RICs back to canonical tickers.
+    Tries these strategies in order:
+      1. Direct match — col_a IS a canonical ticker (Equities_RT tickers,
+         FX pairs like "EUR/USD", indices like "VIX", "DXY", etc.)
+      2. RIC reverse — col_b maps via _RIC_REVERSE
+      3. Parenthetical — extract from "Corn Futures (ZC)" → ZC
+      4. Instrument name — col_a maps via _INSTRUMENT_NAME_MAP
+
+    Returns canonical ticker string, or None if unresolvable.
+    """
+    import re
+
+    # 1. Direct: col_a is itself a known canonical ticker
+    if col_a in LSEG_RIC_MAP:
+        return col_a
+
+    # 2. RIC reverse lookup
+    if col_b:
+        ric = str(col_b).strip()
+        canonical = _RIC_REVERSE.get(ric)
+        if canonical:
+            return canonical
+
+    # 3. Parenthetical: "Corn Futures (ZC)" → ZC
+    m = re.search(r"\(([A-Z/]+)\)", col_a)
+    if m:
+        candidate = m.group(1)
+        if candidate in LSEG_RIC_MAP:
+            return candidate
+
+    # 4. Instrument name fallback
+    return _INSTRUMENT_NAME_MAP.get(col_a)
+
+
+def _extract_price(ws, row: int, bid_col: str, last_col: str) -> float | None:
+    """Read price from BID column, falling back to LAST.
+
+    Filters out RTD error values (#N/A, #NT/FND), zero, and None.
+    Returns a valid float price, or None if no usable price.
+    """
+    for col in (bid_col, last_col):
+        val = ws.range(f"{col}{row}").value
+        if val is None:
+            continue
+        if isinstance(val, str):
+            # RTD error strings like "#N/A", "#NT/FND"
+            if val.startswith("#"):
+                continue
+            val = val.strip()
+            if not val:
+                continue
+        try:
+            price = float(val)
+            if price > 0:
+                return price
+        except (ValueError, TypeError):
+            continue
+    return None
+
+
+def read_t1_prices() -> dict[str, float]:
+    """Read real-time prices from Nenner_DataCenter.xlsm via xlwings.
+
+    Reads two sheets:
+      - Equities_RT:    col A = ticker, col B = BID, col E = LAST
+      - Futures_FX_RT:  col A = instrument name, col B = RIC,
+                        col C = BID, col E = LAST
+
+    For each row, resolves the canonical ticker (direct match, RIC reverse,
+    parenthetical extraction, or instrument name map) and extracts the price
+    (BID preferred, LAST as fallback for indices/FX without streaming BID).
 
     If the workbook is not already open, sends a one-time email notification
     and disables T1 for the rest of this session (no auto-launch of Excel).
@@ -468,43 +586,74 @@ def read_t1_prices() -> dict[str, float]:
         _send_t1_open_email()
         return {}
 
-    # Workbook IS already open — safe to connect (won't launch Excel)
+    # Workbook IS already open — connect by filename only to avoid
+    # OneDrive path mismatch (Excel reports OneDrive path, we have local).
+    import os
+    wb_name = os.path.basename(T1_WORKBOOK)
     try:
-        wb = xw.Book(T1_WORKBOOK)
-        ws = wb.sheets[T1_SHEET]
+        wb = xw.Book(wb_name)
     except Exception as e:
-        log.debug(f"Cannot read T1 workbook: {e}")
+        log.debug(f"Cannot connect to T1 workbook '{wb_name}': {e}")
         return {}
 
     prices: dict[str, float] = {}
-    # Read column B (RIC) and column C (price) until we hit an empty RIC
-    row = T1_DATA_START_ROW
-    max_row = 200  # safety limit
-    while row < max_row:
-        ric = ws.range(f"{T1_RIC_COL}{row}").value
-        price = ws.range(f"{T1_PRICE_COL}{row}").value
 
-        if ric is None:
-            # Skip blank rows but keep going (there may be gaps)
-            row += 1
+    for sheet_name, cfg in T1_SHEETS.items():
+        try:
+            ws = wb.sheets[sheet_name]
+        except Exception:
+            log.warning(f"T1 sheet '{sheet_name}' not found, skipping")
             continue
 
-        ric = str(ric).strip()
-        if ric and price is not None:
-            try:
-                price_val = float(price)
-                # Map RIC back to canonical ticker
-                canonical = _RIC_REVERSE.get(ric)
-                if canonical:
-                    prices[canonical] = price_val
-                else:
-                    log.debug(f"Unknown T1 RIC: {ric} (price={price_val})")
-            except (ValueError, TypeError):
-                log.debug(f"Non-numeric price for RIC {ric}: {price}")
+        row = cfg["data_start_row"]
+        max_row = 200  # safety limit
+        consecutive_empty = 0
 
-        row += 1
+        while row < max_row:
+            col_a = ws.range(f'{cfg["ticker_col"]}{row}').value
 
-    log.info(f"T1 xlwings: read {len(prices)} live prices")
+            if col_a is None:
+                consecutive_empty += 1
+                # Stop after 5 consecutive empty rows (end of data)
+                if consecutive_empty >= 5:
+                    break
+                row += 1
+                continue
+            consecutive_empty = 0
+
+            col_a = str(col_a).strip()
+
+            # Skip section headers and column labels
+            if col_a in _SECTION_HEADERS:
+                row += 1
+                continue
+
+            # Read RIC if this sheet has one
+            col_b = None
+            if cfg["ric_col"]:
+                raw_b = ws.range(f'{cfg["ric_col"]}{row}').value
+                if raw_b is not None:
+                    col_b = str(raw_b).strip() or None
+
+            # Resolve canonical ticker
+            ticker = _resolve_ticker(col_a, col_b)
+            if not ticker:
+                log.debug(f"T1: unmapped row {sheet_name}!{row}: "
+                          f"A={col_a!r} B={col_b!r}")
+                row += 1
+                continue
+
+            # Extract price (BID → LAST fallback)
+            price = _extract_price(
+                ws, row, cfg["bid_col"], cfg["last_col"]
+            )
+            if price is not None and ticker not in prices:
+                prices[ticker] = price
+
+            row += 1
+
+    log.info(f"T1 xlwings: read {len(prices)} live prices "
+             f"from {len(T1_SHEETS)} sheets")
     return prices
 
 
