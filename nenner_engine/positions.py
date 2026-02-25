@@ -1,10 +1,14 @@
 """
 Position Tracker
 =================
-Reads live trade positions from TSLA_Options.xlsm via xlwings,
+Reads live trade positions from an Excel workbook via xlwings,
 parses option codes, computes dollar P/L, and links to Nenner signals.
 
 The Excel workbook is read-only — no cells are written or modified.
+
+Set POSITIONS_WORKBOOK below to the path of the workbook containing
+trade sheets (TradeSheet PUTS, TradeSheet #2 Puts, TradeSheet Calls,
+Put_Call Trade). Set to None to disable position tracking.
 """
 
 import logging
@@ -13,6 +17,14 @@ import sqlite3
 from typing import Optional
 
 log = logging.getLogger("nenner")
+
+# ---------------------------------------------------------------------------
+# Workbook Configuration
+# ---------------------------------------------------------------------------
+# Path to the workbook containing trade sheets. Set to None to disable.
+# When active trades resume, point this at the positions workbook, e.g.:
+#   r"E:\Workspace\DataCenter\Nenner_Positions.xlsm"
+POSITIONS_WORKBOOK = None
 
 
 # ---------------------------------------------------------------------------
@@ -230,23 +242,25 @@ def _read_collar_sheet(ws) -> dict:
 # ---------------------------------------------------------------------------
 
 def read_positions() -> list[dict]:
-    """Read all trade positions from TSLA_Options.xlsm via xlwings.
+    """Read all trade positions from the positions workbook via xlwings.
 
     Returns one dict per trade sheet (position group):
       {sheet_name, strategy, underlying, underlying_bid, legs: [...]}
 
-    Returns empty list if workbook is unavailable.
+    Returns empty list if POSITIONS_WORKBOOK is None or unavailable.
     """
+    if POSITIONS_WORKBOOK is None:
+        log.debug("POSITIONS_WORKBOOK not configured — position tracking disabled")
+        return []
+
     try:
         import xlwings as xw
     except ImportError:
         log.debug("xlwings not installed — position tracking unavailable")
         return []
 
-    from .prices import T1_WORKBOOK
-
     try:
-        wb = xw.Book(T1_WORKBOOK)
+        wb = xw.Book(POSITIONS_WORKBOOK)
     except Exception as e:
         log.debug(f"Cannot open workbook for positions: {e}")
         return []

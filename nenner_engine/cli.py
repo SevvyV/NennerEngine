@@ -178,6 +178,14 @@ Examples:
                         help="Check daily closes against cancel levels and auto-cancel breached signals")
     parser.add_argument("--show-config", action="store_true",
                         help="Show current alert configuration")
+    parser.add_argument("--stanley-teach", type=str, metavar="RULE",
+                        help="Add a knowledge rule to Stanley's knowledge base")
+    parser.add_argument("--stanley-knowledge", action="store_true",
+                        help="List all rules in Stanley's knowledge base")
+    parser.add_argument("--stanley-brief", action="store_true",
+                        help="Generate a Stanley brief from the latest email (on-demand)")
+    parser.add_argument("--stock-report", action="store_true",
+                        help="Generate and email Stanley's Daily Stock Report")
     parser.add_argument("--db", type=str, default=default_db,
                         help=f"Database path (default: {default_db})")
 
@@ -204,6 +212,44 @@ Examples:
         for ac in sorted(cfg.INTRADAY_ASSET_CLASSES):
             print(f"    - {ac}")
         print()
+    elif args.stanley_teach:
+        from .stanley import add_knowledge
+        rule_text = args.stanley_teach
+        category = "pattern"
+        if ":" in rule_text and rule_text.split(":")[0] in (
+            "pattern", "preference", "interpretation", "cross_instrument"
+        ):
+            category, rule_text = rule_text.split(":", 1)
+            rule_text = rule_text.strip()
+        rule_id = add_knowledge(conn, category, rule_text)
+        print(f"Added knowledge rule #{rule_id}: [{category}] {rule_text}")
+    elif args.stanley_knowledge:
+        from .stanley import list_knowledge
+        rules = list_knowledge(conn)
+        if not rules:
+            print("No knowledge rules. Add one with --stanley-teach \"rule text\"")
+        else:
+            print(f"\n  STANLEY KNOWLEDGE BASE ({len(rules)} rules)")
+            print("  " + "=" * 60)
+            for r in rules:
+                status = "ACTIVE" if r["active"] else "inactive"
+                instr = f" [{r['instrument']}]" if r["instrument"] else ""
+                print(f"  #{r['id']:3d} [{r['category']}]{instr} ({status})")
+                print(f"        {r['rule_text'][:80]}")
+            print()
+    elif args.stanley_brief:
+        from .stanley import generate_brief_on_demand
+        brief = generate_brief_on_demand(conn, args.db)
+        # Handle Windows console encoding (cp1252 can't render all Unicode)
+        sys.stdout.buffer.write(brief.encode("utf-8", errors="replace"))
+        sys.stdout.buffer.write(b"\n")
+    elif args.stock_report:
+        from .stock_report import generate_stock_report_on_demand
+        html = generate_stock_report_on_demand(conn, args.db)
+        if html:
+            print(f"Stock report generated and sent ({len(html)} chars)")
+        else:
+            print("Stock report generation failed — check logs")
     elif args.auto_cancel:
         results = check_auto_cancellations(conn)
         if results:

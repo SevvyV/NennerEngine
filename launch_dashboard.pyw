@@ -17,9 +17,9 @@ import socket
 # Run from the NennerEngine project root
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
-DB_PATH = r"E:\AI_Workspace\NennerEngine\nenner_signals.db"
-LOG_PATH = r"E:\AI_Workspace\NennerEngine\nenner_engine.log"
-PID_PATH = r"E:\AI_Workspace\NennerEngine\.launcher_pids"
+DB_PATH = r"E:\Workspace\NennerEngine\nenner_signals.db"
+LOG_PATH = r"E:\Workspace\NennerEngine\nenner_engine.log"
+PID_PATH = r"E:\Workspace\NennerEngine\.launcher_pids"
 PORT = 8050
 
 # pythonw.exe cannot run console apps properly, so we need to find

@@ -42,6 +42,10 @@ DAILY_REPORT_TIMES = [(9, 0), (10, 30)]
 AUTO_CANCEL_HOUR = 16       # 4:30 PM ET
 AUTO_CANCEL_MINUTE = 30
 
+# Stanley's Daily Stock Report: sent once daily pre-market
+STOCK_REPORT_HOUR = 7       # 7:00 AM ET
+STOCK_REPORT_MINUTE = 0
+
 
 # ---------------------------------------------------------------------------
 # Timezone helper (stdlib-only via zoneinfo, Python 3.9+)
@@ -210,6 +214,25 @@ def _send_daily_top_trades(db_path: str):
 # Auto-Cancel (breached cancel levels)
 # ---------------------------------------------------------------------------
 
+def _send_stock_report(db_path: str):
+    """Generate and send Stanley's Daily Stock Report via email.
+
+    Opens its own DB connection, gathers data, generates HTML, sends.
+    """
+    try:
+        from .db import init_db, migrate_db
+        from .stock_report import generate_and_send_stock_report
+
+        conn = init_db(db_path)
+        migrate_db(conn)
+
+        generate_and_send_stock_report(conn, db_path)
+        conn.close()
+
+    except Exception as e:
+        log.error(f"Stock report send failed: {e}", exc_info=True)
+
+
 def _run_auto_cancel(db_path: str, date_str: Optional[str] = None):
     """Run auto-cancellation check for breached cancel levels.
 
@@ -328,6 +351,45 @@ def run_email_check(db_path: str) -> dict:
             if changes:
                 log.info(f"Email scheduler: {len(changes)} direction change(s) detected")
                 _send_trade_alerts(changes, db_path)
+
+            # Generate Stanley's interpreted morning brief
+            try:
+                from .stanley import generate_morning_brief
+
+                latest_email = conn.execute(
+                    "SELECT id, raw_text FROM emails ORDER BY id DESC LIMIT 1"
+                ).fetchone()
+
+                if latest_email:
+                    email_id = latest_email["id"]
+                    raw_text = latest_email["raw_text"]
+
+                    sigs = conn.execute(
+                        "SELECT * FROM signals WHERE email_id = ?", (email_id,)
+                    ).fetchall()
+                    cycs = conn.execute(
+                        "SELECT * FROM cycles WHERE email_id = ?", (email_id,)
+                    ).fetchall()
+                    tgts = conn.execute(
+                        "SELECT * FROM price_targets WHERE email_id = ?", (email_id,)
+                    ).fetchall()
+
+                    parsed_signals = {
+                        "signals": [dict(s) for s in sigs],
+                        "cycles": [dict(c) for c in cycs],
+                        "price_targets": [dict(t) for t in tgts],
+                    }
+
+                    generate_morning_brief(
+                        conn=conn,
+                        raw_email_text=raw_text,
+                        parsed_signals=parsed_signals,
+                        changes=changes,
+                        db_path=db_path,
+                        email_id=email_id,
+                    )
+            except Exception as e:
+                log.error(f"Stanley brief generation failed: {e}", exc_info=True)
         else:
             log.info("Email scheduler: no new emails")
 
@@ -380,6 +442,8 @@ class EmailScheduler:
         self._sent_reports: set[str] = set()
         # Track auto-cancel: date string of last run
         self._last_auto_cancel_date: Optional[str] = None
+        # Track stock report: date string of last send
+        self._last_stock_report_date: Optional[str] = None
 
     @property
     def last_result(self) -> Optional[dict]:
@@ -414,6 +478,20 @@ class EmailScheduler:
                              f"({report_hour}:{report_minute:02d} ET)")
                     _send_daily_top_trades(self.db_path)
 
+    def _check_stock_report(self, now_et: datetime):
+        """Check if it's time to send Stanley's Daily Stock Report (once per day)."""
+        if (now_et.hour == STOCK_REPORT_HOUR
+                and STOCK_REPORT_MINUTE <= now_et.minute < STOCK_REPORT_MINUTE + 5):
+            today_str = now_et.strftime("%Y-%m-%d")
+            # Skip weekends
+            if now_et.weekday() >= 5:
+                return
+            if self._last_stock_report_date != today_str:
+                self._last_stock_report_date = today_str
+                log.info(f"Email scheduler: sending Stanley's Daily Stock Report "
+                         f"({STOCK_REPORT_HOUR}:{STOCK_REPORT_MINUTE:02d} ET)")
+                _send_stock_report(self.db_path)
+
     def _check_auto_cancel(self, now_et: datetime):
         """Check if it's time to run auto-cancel (4:30 PM ET, once per day)."""
         if (now_et.hour == AUTO_CANCEL_HOUR
@@ -424,11 +502,42 @@ class EmailScheduler:
                 log.info(f"Auto-cancel: running daily check for {today_str}")
                 _run_auto_cancel(self.db_path, today_str)
 
+    def _startup_stock_report_catchup(self):
+        """Send stock report on startup if we missed today's scheduled window.
+
+        Fires if:
+          - It's a weekday
+          - Current time is past the scheduled send time (7:00 AM ET)
+          - We haven't already sent today's report this session
+        """
+        now_et = _now_eastern()
+        if now_et.weekday() >= 5:
+            return  # weekend
+        today_str = now_et.strftime("%Y-%m-%d")
+        if self._last_stock_report_date == today_str:
+            return  # already sent this session
+
+        scheduled = now_et.replace(
+            hour=STOCK_REPORT_HOUR, minute=STOCK_REPORT_MINUTE, second=0, microsecond=0,
+        )
+        if now_et > scheduled + timedelta(minutes=5):
+            # We missed the window — catch up now
+            self._last_stock_report_date = today_str
+            log.info(
+                f"Stock report catch-up: missed {STOCK_REPORT_HOUR}:"
+                f"{STOCK_REPORT_MINUTE:02d} AM window, sending now "
+                f"(launched at {now_et.strftime('%H:%M')} ET)"
+            )
+            _send_stock_report(self.db_path)
+
     def _run(self):
         """Main scheduler loop."""
         # --- Startup check ---
         if self.check_on_start:
             self._do_check("startup")
+
+        # --- Startup stock report catch-up (if we missed 7 AM) ---
+        self._startup_stock_report_catchup()
 
         # --- Startup auto-cancel catchup (covers missed days) ---
         log.info("Auto-cancel: running startup catchup")
@@ -472,6 +581,9 @@ class EmailScheduler:
 
                 # Daily Top 10 Trades report (independent of email check)
                 self._check_daily_reports(now_et)
+
+                # Stanley's Daily Stock Report: 7:00 AM ET weekdays
+                self._check_stock_report(now_et)
 
                 # Auto-cancel: 4:30 PM ET daily after market close
                 self._check_auto_cancel(now_et)

@@ -198,6 +198,25 @@ def migrate_db(conn: sqlite3.Connection):
             created_at TEXT DEFAULT (datetime('now'))
         )""",
         "CREATE INDEX IF NOT EXISTS idx_alert_log_ticker ON alert_log(ticker, alert_type, created_at DESC)",
+        # v5: Stanley knowledge base and briefs
+        """CREATE TABLE IF NOT EXISTS stanley_knowledge (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            category TEXT NOT NULL,
+            instrument TEXT,
+            rule_text TEXT NOT NULL,
+            confidence REAL DEFAULT 1.0,
+            source TEXT DEFAULT 'user_correction',
+            created_at TEXT DEFAULT (datetime('now')),
+            active INTEGER DEFAULT 1
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_stanley_knowledge_active ON stanley_knowledge(active, category)",
+        """CREATE TABLE IF NOT EXISTS stanley_briefs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            email_id INTEGER REFERENCES emails(id),
+            brief_text TEXT NOT NULL,
+            created_at TEXT DEFAULT (datetime('now'))
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_stanley_briefs_email ON stanley_briefs(email_id)",
     ]
     for sql in migrations:
         try:
@@ -219,7 +238,44 @@ def migrate_db(conn: sqlite3.Connection):
     except sqlite3.OperationalError:
         pass  # View already exists
     conn.commit()
+    # Seed Stanley knowledge base on first run
+    _seed_stanley_knowledge(conn)
     log.info("Database migrations applied")
+
+
+def _seed_stanley_knowledge(conn: sqlite3.Connection):
+    """Insert initial knowledge rules if the stanley_knowledge table is empty."""
+    try:
+        count = conn.execute("SELECT COUNT(*) FROM stanley_knowledge").fetchone()[0]
+    except sqlite3.OperationalError:
+        return  # Table doesn't exist yet
+    if count > 0:
+        return
+
+    seeds = [
+        ("pattern", None,
+         "Cancellation implies reversal in Nenner's system. A cancelled BUY becomes an effective SELL and vice versa."),
+        ("cross_instrument", None,
+         "DXY (US Dollar Index) and EUR/USD are inverse. When DXY gets a BUY, expect EUR/USD to get a SELL."),
+        ("pattern", None,
+         "The 'note the change' flag means the cancel level was adjusted from a prior email. This often indicates Nenner is tightening or loosening the stop."),
+        ("pattern", None,
+         "3+ cancel level changes in a short period (1-2 weeks) for the same instrument often precedes a signal flip."),
+        ("cross_instrument", None,
+         "Daily cycle up + weekly cycle down = potential chop zone. Be cautious with new positions in this configuration."),
+        ("cross_instrument", None,
+         "Gold (GC) and Silver (SI) tend to move together. A cancellation in one often foreshadows a cancellation in the other within days."),
+        ("preference", None,
+         "Instruments with risk_flag AVOID should be highlighted prominently in the brief so the trader is warned."),
+    ]
+    for category, instrument, rule_text in seeds:
+        conn.execute(
+            "INSERT INTO stanley_knowledge (category, instrument, rule_text, confidence, source) "
+            "VALUES (?, ?, ?, 1.0, 'system')",
+            (category, instrument, rule_text)
+        )
+    conn.commit()
+    log.info(f"Stanley knowledge base seeded with {len(seeds)} rules")
 
 
 # ---------------------------------------------------------------------------

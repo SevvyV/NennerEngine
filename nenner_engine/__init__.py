@@ -103,6 +103,24 @@ from .trade_stats import (
     get_profit_factor,
     build_top_trades_message,
 )
+from .stanley import (
+    generate_morning_brief,
+    generate_brief_on_demand,
+    get_knowledge_base,
+    add_knowledge,
+    deactivate_knowledge,
+    list_knowledge,
+    store_brief,
+    get_latest_brief,
+)
+from .stock_report import (
+    generate_and_send_stock_report,
+    generate_stock_report_on_demand,
+    gather_report_data,
+    build_stock_report_html,
+    send_email,
+    FOCUS_STOCKS,
+)
 
 __all__ = [
     # Instruments
@@ -144,4 +162,12 @@ __all__ = [
     # Trade Stats
     "extract_trades_from_db", "compute_instrument_stats",
     "get_profit_factor", "build_top_trades_message",
+    # Stanley
+    "generate_morning_brief", "generate_brief_on_demand",
+    "get_knowledge_base", "add_knowledge", "deactivate_knowledge",
+    "list_knowledge", "store_brief", "get_latest_brief",
+    # Stock Report
+    "generate_and_send_stock_report", "generate_stock_report_on_demand",
+    "gather_report_data", "build_stock_report_html",
+    "send_email", "FOCUS_STOCKS",
 ]

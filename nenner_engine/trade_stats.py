@@ -210,6 +210,14 @@ def extract_trades_from_db(conn: sqlite3.Connection,
                 if median_skip:
                     continue
 
+            # Compute trade duration in calendar days
+            try:
+                d_entry = datetime.strptime(entry["date"], "%Y-%m-%d")
+                d_exit = datetime.strptime(exit_["date"], "%Y-%m-%d")
+                duration_days = (d_exit - d_entry).days
+            except (ValueError, TypeError):
+                duration_days = None
+
             trades.append({
                 "ticker": ticker,
                 "instrument": entry["instrument"],
@@ -218,6 +226,9 @@ def extract_trades_from_db(conn: sqlite3.Connection,
                 "entry_price": entry_price,
                 "exit_price": exit_price,
                 "pnl_pct": pnl_pct,
+                "entry_date": entry["date"],
+                "exit_date": exit_["date"],
+                "duration_days": duration_days,
             })
 
     return trades
@@ -357,6 +368,14 @@ def compute_instrument_stats(conn: sqlite3.Connection,
         composite = _compute_composite_raw(sharpe, kelly, ev_maxdd,
                                            win_rate_frac, confidence)
 
+        # Trade duration stats (calendar days)
+        durations = [t["duration_days"] for t in trades
+                     if t.get("duration_days") is not None and t["duration_days"] > 0]
+        avg_duration = round(mean(durations), 1) if durations else None
+        median_duration = round(median(durations), 1) if durations else None
+        min_duration = min(durations) if durations else None
+        max_duration = max(durations) if durations else None
+
         stats[ticker] = {
             "profit_factor": round(pf, 2),
             "win_rate": round(win_rate_pct, 1),
@@ -378,6 +397,11 @@ def compute_instrument_stats(conn: sqlite3.Connection,
             "max_drawdown": round(max_dd, 2),
             "confidence": round(confidence, 2),
             "composite": round(composite, 4),
+            # Trade duration
+            "avg_duration": avg_duration,
+            "median_duration": median_duration,
+            "min_duration": min_duration,
+            "max_duration": max_duration,
         }
 
     # Store in the correct cache

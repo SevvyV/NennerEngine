@@ -16,7 +16,7 @@ Methodology:
     are collapsed -only the first signal per direction change is used.
   - CANCELLED signals are tracked separately as a quality indicator.
 
-Output: PDF report saved to E:\\AI_Workspace\\NennerEngine\\performance_reports\\
+Output: PDF report saved to E:\\Workspace\\NennerEngine\\performance_reports\\
 """
 
 import sqlite3

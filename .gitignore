@@ -9,3 +9,4 @@ __pycache__/
 .launcher_pids
 performance_reports/
 nul
+*.lnk

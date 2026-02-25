@@ -4,7 +4,7 @@ Starts the alert monitor daemon with Telegram notifications.
 Uses .pyw extension so no console window flashes on double-click.
 
 To see live output, run from terminal instead:
-    python -m nenner_engine --monitor --db E:\AI_Workspace\NennerEngine\nenner_signals.db
+    python -m nenner_engine --monitor --db E:\Workspace\NennerEngine\nenner_signals.db
 """
 import subprocess
 import sys
@@ -22,7 +22,7 @@ proc = subprocess.Popen(
         "-m", "nenner_engine",
         "--monitor",
         "--interval", "60",
-        "--db", r"E:\AI_Workspace\NennerEngine\nenner_signals.db",
+        "--db", r"E:\Workspace\NennerEngine\nenner_signals.db",
     ],
     creationflags=subprocess.CREATE_NEW_CONSOLE,
 )
