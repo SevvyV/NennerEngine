@@ -6,8 +6,7 @@ for the Fischer options scan reports.
 
 Subscribers are stored in ``fischer_subscribers`` with a linked portfolio
 (``fischer_portfolios``).  On-demand refreshes are triggered by emails with
-subject "Refresh Fischer" (or "Refresh Fischer Client <LastName>") and
-rate-limited via ``fischer_refresh_log``.
+subject containing "Refresh" and rate-limited via ``fischer_refresh_log``.
 """
 
 import json
@@ -222,42 +221,11 @@ def _log_refresh(conn: sqlite3.Connection, subscriber_id: int,
 
 
 # ---------------------------------------------------------------------------
-# Subject Parsing
-# ---------------------------------------------------------------------------
-
-def _parse_refresh_subject(subject: str) -> tuple[str, Optional[str]]:
-    """Parse 'Refresh Fischer' or 'Refresh Fischer Client LastName'.
-
-    Returns (mode, last_name):
-      - ("self", None) for plain 'Refresh Fischer'
-      - ("client", "Smith") for 'Refresh Fischer Client Smith'
-    """
-    cleaned = subject.strip()
-    # Case-insensitive prefix match
-    prefix = "refresh fischer"
-    if not cleaned.lower().startswith(prefix):
-        return ("unknown", None)
-
-    remainder = cleaned[len(prefix):].strip()
-    if not remainder:
-        return ("self", None)
-
-    # Expect "Client LastName"
-    client_prefix = "client "
-    if remainder.lower().startswith(client_prefix):
-        last_name = remainder[len(client_prefix):].strip()
-        if last_name:
-            return ("client", last_name)
-
-    return ("self", None)
-
-
-# ---------------------------------------------------------------------------
 # IMAP Refresh Polling
 # ---------------------------------------------------------------------------
 
 def poll_refresh_requests(db_path: str) -> int:
-    """Poll Gmail IMAP for unseen 'Refresh Fischer' emails.
+    """Poll Gmail IMAP for unseen 'Refresh' emails.
 
     If the FischerReliability singleton is active, delegates to the
     ResilientIMAPPoller (exponential backoff + admin alerts).
@@ -308,12 +276,12 @@ def _poll_refresh_raw(db_path: str) -> int:
 
     try:
         imap.select("INBOX")
-        status, data = imap.search(None, '(UNSEEN SUBJECT "Refresh Fischer")')
+        status, data = imap.search(None, '(UNSEEN SUBJECT "Refresh")')
         if status != "OK" or not data[0]:
             return 0
 
         msg_ids = data[0].split()
-        log.info(f"Fischer refresh: found {len(msg_ids)} unseen 'Refresh Fischer' email(s)")
+        log.info(f"Fischer refresh: found {len(msg_ids)} unseen 'Refresh' email(s)")
 
         conn = init_db(db_path)
         try:
@@ -372,30 +340,8 @@ def _process_refresh_email(imap, conn: sqlite3.Connection,
         log.info(f"Fischer refresh: sender {sender_email} is not an active subscriber, skipping")
         return 0
 
-    # 2. Parse subject to determine portfolio
-    mode, last_name = _parse_refresh_subject(subject)
-    if mode == "unknown":
-        log.info(f"Fischer refresh: unrecognized subject '{subject}', skipping")
-        return 0
-
-    if mode == "client" and last_name:
-        # Verify sender matches the client they're requesting for
-        target = get_subscriber_by_last_name(conn, last_name)
-        if not target:
-            log.warning(f"Fischer refresh: no subscriber found for last_name='{last_name}'")
-            _log_refresh(conn, subscriber["id"], subject, "", "error",
-                         f"No subscriber found for last_name '{last_name}'")
-            return 0
-        if target["email"] != sender_email:
-            log.warning(f"Fischer refresh: sender {sender_email} does not match "
-                        f"subscriber {target['email']} for {last_name}")
-            _log_refresh(conn, subscriber["id"], subject, "", "error",
-                         f"Sender mismatch for {last_name}")
-            return 0
-        portfolio_name = target["portfolio_name"]
-    else:
-        # "self" mode — use sender's own portfolio
-        portfolio_name = subscriber["portfolio_name"]
+    # 2. Use sender's own portfolio
+    portfolio_name = subscriber["portfolio_name"]
 
     # 3. Check rate limit
     allowed, used = check_rate_limit(
