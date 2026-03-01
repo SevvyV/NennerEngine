@@ -1,0 +1,15 @@
+────────────────────────────────────────────────────────────────
+FISCHER — TERMS OF SERVICE & INVESTMENT DISCLAIMER
+────────────────────────────────────────────────────────────────
+
+By accessing or using this Service, you acknowledge and agree to the following:
+
+Not Investment Advice. The Service provides impersonal, objective, quantitative data and mathematical modeling. Output is algorithmically generated and does not consider your individual financial circumstances, objectives, or risk tolerance.
+
+Publisher of Financial Information. The Service operates solely as a publisher of financial information for educational and informational purposes. It is a standalone automated service with no human advisor involvement, and no communication should be interpreted as personalized financial guidance.
+
+Model Limitations. Metrics such as "Probability of Profit" are theoretical calculations derived from option pricing models, historical volatility, and current market data. These figures are estimates only and are not guarantees of future performance.
+
+Execution Risk & Market Mechanics. You bear sole responsibility for all trading decisions and trade execution. Market conditions — including wide bid-ask spreads (including those commonly occurring between 4:00 PM and 4:15 PM ET) — may materially affect outcomes.
+
+Assumption of Risk. Options trading involves substantial risk of loss and is not appropriate for all investors. Covered put strategies involve short stock exposure and carry significant directional market risk.
