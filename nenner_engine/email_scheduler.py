@@ -51,7 +51,7 @@ STOCK_REPORT_MINUTE = 0
 FISCHER_SCAN_SCHEDULE: list[tuple[int, int, str]] = [
     (9, 45, "opening"),
     (12, 0, "midday"),
-    (15, 55, "closing"),
+    (15, 45, "closing"),
 ]
 
 
@@ -262,10 +262,9 @@ def _send_stock_report(db_path: str):
 
 
 def _send_fischer_scan_report(db_path: str, slot: str):
-    """Generate and send Fischer scan report for a specific slot,
-    then distribute to active subscribers."""
+    """Generate and send Fischer scan report for a specific slot."""
     try:
-        from .fischer_daily_report import send_scan_report, send_subscriber_scan_reports
+        from .fischer_daily_report import send_scan_report
         from .fischer_reliability import FischerReliability
 
         rel = FischerReliability.get_instance()
@@ -273,7 +272,11 @@ def _send_fischer_scan_report(db_path: str, slot: str):
             rel.wrap_scan_call(db_path, slot, lambda p, s: send_scan_report(p, slot=s))
         else:
             send_scan_report(db_path, slot=slot)
-        send_subscriber_scan_reports(db_path, slot=slot)
+        # TODO: Re-enable when custom subscriber portfolios are onboarded.
+        # Disabled because fischer_daily portfolio duplicates the admin Daily Scan.
+        # When re-enabling, also align _build_recommendation_email layout with
+        # _build_unified_email for formatting consistency.
+        # send_subscriber_scan_reports(db_path, slot=slot)
     except Exception as e:
         log.error(f"Fischer {slot} report failed: {e}", exc_info=True)
 
