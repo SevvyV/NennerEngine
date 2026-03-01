@@ -27,7 +27,7 @@ log = logging.getLogger("nenner")
 # Configuration
 # ---------------------------------------------------------------------------
 
-FOCUS_STOCKS = ["AAPL", "BAC", "GOOG", "MSFT", "NVDA", "TSLA", "ES", "NQ", "YM"]
+FOCUS_STOCKS = ["AAPL", "BAC", "GOOG", "MSFT", "NVDA", "TSLA", "ES", "NQ"]
 
 STOCK_NAMES = {
     "AAPL": "Apple Inc.",
@@ -38,7 +38,12 @@ STOCK_NAMES = {
     "TSLA": "Tesla Inc.",
     "ES": "S&P 500 Futures",
     "NQ": "Nasdaq 100 Futures",
-    "YM": "Dow Jones Futures",
+}
+
+# Display names for tickers in the report (overrides raw ticker where shown)
+DISPLAY_TICKER = {
+    "ES": "S&P 500",
+    "NQ": "QQQ",
 }
 
 REPORT_MODEL = "claude-sonnet-4-5-20250929"
@@ -420,6 +425,7 @@ def gather_report_data(conn: sqlite3.Connection) -> list[dict]:
 
         stock = {
             "ticker": ticker,
+            "display_ticker": DISPLAY_TICKER.get(ticker, ticker),
             "name": STOCK_NAMES.get(ticker, ticker),
             "instrument": state["instrument"],
             "signal": signal,
@@ -541,7 +547,7 @@ def _build_header_html(stocks_data: list[dict]) -> str:
     sell_count = sum(1 for s in stocks_data if s["signal"] == "SELL")
     buy_count = len(stocks_data) - sell_count
 
-    alerts = [s["ticker"] for s in stocks_data if s.get("inflection_flags")]
+    alerts = [s["display_ticker"] for s in stocks_data if s.get("inflection_flags")]
     alert_summary = ""
     if alerts:
         alert_summary = (
@@ -626,7 +632,7 @@ def _build_heat_map_html(stocks_data: list[dict]) -> str:
 
         rows_html += f'''
         <tr style="background-color:{bg};">
-          <td style="{td} font-weight:600;">{s["ticker"]}</td>
+          <td style="{td} font-weight:600;">{s["display_ticker"]}</td>
           <td style="{td_c} color:{_signal_color(s['signal'])}; font-weight:600;">
             {signal_str}
           </td>
@@ -718,27 +724,28 @@ def _build_inflection_alerts_html(stocks_data: list[dict]) -> str:
             border_clr, bg_clr = _CLR_AMBER, _CLR_LIGHT_AMBER
 
         # Build title
+        dt = s["display_ticker"]
         if "CANCEL_DANGER" in flags:
-            title = f'{s["ticker"]} &mdash; CANCEL IN DANGER ZONE'
+            title = f'{dt} &mdash; CANCEL IN DANGER ZONE'
         elif "REVERSAL" in flags:
-            title = f'{s["ticker"]} &mdash; SIGNAL JUST REVERSED ({s["last_signal_date"]})'
+            title = f'{dt} &mdash; SIGNAL JUST REVERSED ({s["last_signal_date"]})'
         elif "AT_TARGET" in flags:
-            title = f'{s["ticker"]} &mdash; AT PRICE TARGET'
+            title = f'{dt} &mdash; AT PRICE TARGET'
         elif "TARGET_REACHED" in flags:
             staircase = s.get("target_staircase", {})
             prev_tp = staircase.get("previous_target")
-            title = f'{s["ticker"]} &mdash; TARGET {_fmt_price(prev_tp)} REACHED &mdash; NEW TARGET SET'
+            title = f'{dt} &mdash; TARGET {_fmt_price(prev_tp)} REACHED &mdash; NEW TARGET SET'
         elif "HIGH_CHURN" in flags:
-            title = f'{s["ticker"]} &mdash; HIGH CANCEL CHURN'
+            title = f'{dt} &mdash; HIGH CANCEL CHURN'
         elif "TRADE_AGING" in flags:
             age_days = s.get("trade_age_days", "?")
             avg_dur = s.get("avg_duration")
             avg_str = f'{avg_dur:.0f}' if avg_dur else "?"
-            title = f'{s["ticker"]} &mdash; TRADE AGING (DAY {age_days} OF AVG {avg_str})'
+            title = f'{dt} &mdash; TRADE AGING (DAY {age_days} OF AVG {avg_str})'
         elif "LOW_RR" in flags:
-            title = f'{s["ticker"]} &mdash; REWARD:RISK DETERIORATED'
+            title = f'{dt} &mdash; REWARD:RISK DETERIORATED'
         else:
-            title = f'{s["ticker"]} &mdash; APPROACHING CANCEL LEVEL'
+            title = f'{dt} &mdash; APPROACHING CANCEL LEVEL'
 
         # Build detail lines
         lines = []
@@ -955,7 +962,7 @@ def _build_stock_detail_html(stocks_data: list[dict]) -> str:
                     padding:16px 20px; margin-bottom:14px; background:{_CLR_WHITE};">
           <h3 style="margin:0 0 10px; font-size:15px; color:{_CLR_TEXT};
                      font-family:{_FONT};">
-            {s["ticker"]} &mdash; {s["name"]}
+            {s["display_ticker"]} &mdash; {s["name"]}
           </h3>
           <table role="presentation" cellpadding="0" cellspacing="0"
                  style="font-family:{_FONT};">
@@ -1075,7 +1082,7 @@ def _build_exit_framework_html(stocks_data: list[dict]) -> str:
                     border-left:3px solid {urgency_clr};
                     background:{_CLR_ROW_ALT}; border-radius:0 4px 4px 0;">
           <span style="font-size:14px; font-weight:600; color:{_CLR_TEXT};">
-            {rank}. {s["ticker"]}
+            {rank}. {s["display_ticker"]}
           </span>
           <span style="color:{pnl_clr}; font-weight:600; font-size:13px;">
             &nbsp;{pnl_str}
@@ -1134,12 +1141,12 @@ def _build_footer_html(stocks_data: list[dict]) -> str:
     <tr><td style="padding:16px 32px; background:{_CLR_ROW_ALT};
                    border-top:1px solid {_CLR_BORDER};">
       <p style="margin:0; font-size:11px; color:{_CLR_MUTED}; font-family:{_FONT};">
-        Generated by Stanley | NennerEngine
+        Generated by Stanley
         &nbsp;&bull;&nbsp; {now.strftime("%b %d, %Y %I:%M %p")}
         &nbsp;&bull;&nbsp; Prices: {source_str}
       </p>
       <p style="margin:4px 0 0; font-size:11px; color:{_CLR_MUTED}; font-family:{_FONT};">
-        Vartanian Capital Management, LLC &mdash; For internal use only
+        For internal use only
       </p>
     </td></tr>'''
 
