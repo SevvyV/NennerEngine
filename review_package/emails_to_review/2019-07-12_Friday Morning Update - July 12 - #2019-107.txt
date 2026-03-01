@@ -1,0 +1,19 @@
+EMAIL ID: 179
+DATE:     2019-07-12
+SUBJECT:  Friday Morning Update - July 12 - #2019-107
+FLAGGED SIGNALS: 1
+================================================================================
+
+  Signal #41044  [CHECK]
+  Ticker:       YM
+  Date:         2019-07-12
+  Field:        cancel_level
+  Signal Value: 6800.0
+  Actual Close: 27309.0000
+  Ratio:        0.249x
+  Type:         SELL
+  Suggestion:   Ratio 0.25x -- moderate deviation
+  Raw Text:     DOW below 6,800
+
+------------------------------------------------------------
+

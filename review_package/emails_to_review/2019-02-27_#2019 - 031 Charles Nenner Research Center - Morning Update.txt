@@ -1,0 +1,19 @@
+EMAIL ID: 82
+DATE:     2019-02-27
+SUBJECT:  #2019 - 031 Charles Nenner Research Center - Morning Update - Wednesday, February 27, 2019
+FLAGGED SIGNALS: 1
+================================================================================
+
+  Signal #40218  [MANUAL]
+  Ticker:       GC
+  Date:         2019-02-27
+  Field:        cancel_level
+  Signal Value: 113.19
+  Actual Close: 1317.7000
+  Ratio:        0.086x
+  Type:         SELL
+  Suggestion:   Ratio 0.09x -- severe, needs manual review
+  Raw Text:     A close below 113.19 for gold and for silver 15.61 will be a sell signal.
+
+------------------------------------------------------------
+

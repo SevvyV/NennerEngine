@@ -1,0 +1,32 @@
+EMAIL ID: 876
+DATE:     2021-05-21
+SUBJECT:  Friday Morning Update - May 21 #2021-088
+FLAGGED SIGNALS: 2
+================================================================================
+
+  Signal #45865  [MANUAL]
+  Ticker:       USD/CHF
+  Date:         2021-05-21
+  Field:        cancel_level
+  Signal Value: 0.095
+  Actual Close: 0.8973
+  Ratio:        0.106x
+  Type:         SELL
+  Suggestion:   Ratio 0.11x -- large deviation
+  Raw Text:     The move to 0.88 continues. Now trading around 0.8950 the move will continue as long as there is no close above .0950. (Note the change)
+
+------------------------------------------------------------
+
+  Signal #45857  [MANUAL]
+  Ticker:       ZS
+  Date:         2021-05-21
+  Field:        cancel_level
+  Signal Value: 14.05
+  Actual Close: 1526.2500
+  Ratio:        0.009x
+  Type:         SELL
+  Suggestion:   Value 14.05 looks like SOYB ETF, not ZS futures (~1526)
+  Raw Text:     Continue on a sell signal and the cycles are down until June. Only a close above 14.05 will cancel the sell signal.
+
+------------------------------------------------------------
+

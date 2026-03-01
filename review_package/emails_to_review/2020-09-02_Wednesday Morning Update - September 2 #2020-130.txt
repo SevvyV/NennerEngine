@@ -1,0 +1,19 @@
+EMAIL ID: 609
+DATE:     2020-09-02
+SUBJECT:  Wednesday Morning Update - September 2 #2020-130
+FLAGGED SIGNALS: 1
+================================================================================
+
+  Signal #43584  [MANUAL]
+  Ticker:       ZB
+  Date:         2020-09-02
+  Field:        cancel_level
+  Signal Value: 17508.0
+  Actual Close: 178.8750
+  Ratio:        97.878x
+  Type:         BUY
+  Suggestion:   Ratio 97.88x -- severe, needs manual review
+  Raw Text:     The Bonds are on a small buy signal but we are standing aside. The following closes will again cancel the buy signal. US 30 year below 17508
+
+------------------------------------------------------------
+

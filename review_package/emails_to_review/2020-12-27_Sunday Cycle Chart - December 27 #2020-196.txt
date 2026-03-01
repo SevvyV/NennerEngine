@@ -1,0 +1,19 @@
+EMAIL ID: 719
+DATE:     2020-12-27
+SUBJECT:  Sunday Cycle Chart - December 27 #2020-196
+FLAGGED SIGNALS: 1
+================================================================================
+
+  Signal #44423  [MANUAL]
+  Ticker:       YM
+  Date:         2020-12-27
+  Field:        cancel_level
+  Signal Value: 3440.0
+  Actual Close: 30109.0000
+  Ratio:        0.114x
+  Type:         SELL
+  Suggestion:   Ratio 0.11x -- large deviation
+  Raw Text:     A close below 3,440 will be a break below the rising wedge which usually is very negative.
+
+------------------------------------------------------------
+

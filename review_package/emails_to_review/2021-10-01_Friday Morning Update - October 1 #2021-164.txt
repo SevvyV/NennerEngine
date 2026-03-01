@@ -1,0 +1,19 @@
+EMAIL ID: 1002
+DATE:     2021-10-01
+SUBJECT:  Friday Morning Update - October 1 #2021-164
+FLAGGED SIGNALS: 1
+================================================================================
+
+  Signal #47552  [CHECK]
+  Ticker:       GLD
+  Date:         2021-10-01
+  Field:        cancel_level
+  Signal Value: 64.5
+  Actual Close: 164.5900
+  Ratio:        0.392x
+  Type:         SELL
+  Suggestion:   Ratio 0.39x -- moderate deviation
+  Raw Text:     Sell signals continue as long as we don't see the following closes: GLD above 64.50
+
+------------------------------------------------------------
+

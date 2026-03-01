@@ -1,0 +1,19 @@
+EMAIL ID: 1083
+DATE:     2021-12-28
+SUBJECT:  ✳ Intraday #105 – S&P, DIA, Gold, GLD, Silver, Crude, Bitcoin & AT&T
+FLAGGED SIGNALS: 1
+================================================================================
+
+  Signal #48959  [MANUAL]
+  Ticker:       YM
+  Date:         2021-12-28
+  Field:        cancel_level
+  Signal Value: 362.0
+  Actual Close: 36282.0000
+  Ratio:        0.010x
+  Type:         BUY
+  Suggestion:   Ratio 0.01x -- severe, needs manual review
+  Raw Text:     The buy signal continues but the DIA is at the top of the intraday channel. A close below the channel, around 362, will cancel the buy signal but just short term.
+
+------------------------------------------------------------
+

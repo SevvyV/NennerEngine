@@ -1,0 +1,19 @@
+EMAIL ID: 999
+DATE:     2021-09-27
+SUBJECT:  Monday Morning Update - September 27 #2021-162
+FLAGGED SIGNALS: 1
+================================================================================
+
+  Signal #47519  [MANUAL]
+  Ticker:       ZC
+  Date:         2021-09-27
+  Field:        cancel_level
+  Signal Value: 5.3
+  Actual Close: 539.5000
+  Ratio:        0.010x
+  Type:         SELL
+  Suggestion:   Ratio 0.01x -- severe, needs manual review
+  Raw Text:     Short term cycles are down until October 12 and a close above 5.30 will cancel the sell signal.
+
+------------------------------------------------------------
+

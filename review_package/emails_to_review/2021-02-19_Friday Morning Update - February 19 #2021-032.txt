@@ -1,0 +1,19 @@
+EMAIL ID: 782
+DATE:     2021-02-19
+SUBJECT:  Friday Morning Update - February 19 #2021-032
+FLAGGED SIGNALS: 1
+================================================================================
+
+  Signal #44876  [MANUAL]
+  Ticker:       AUD/USD
+  Date:         2021-02-19
+  Field:        cancel_level
+  Signal Value: 178.9
+  Actual Close: 0.7768
+  Ratio:        230.304x
+  Type:         SELL
+  Suggestion:   Ratio 230.30x -- severe, needs manual review
+  Raw Text:     Continues on a sell signal as long as there is no close above 178.90 but he cycles are down.
+
+------------------------------------------------------------
+

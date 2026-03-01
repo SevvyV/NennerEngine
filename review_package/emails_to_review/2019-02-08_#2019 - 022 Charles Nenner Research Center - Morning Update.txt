@@ -1,0 +1,19 @@
+EMAIL ID: 67
+DATE:     2019-02-08
+SUBJECT:  #2019 - 022 Charles Nenner Research Center - Morning Update  -  Friday, February 8, 2019
+FLAGGED SIGNALS: 1
+================================================================================
+
+  Signal #40168  [MANUAL]
+  Ticker:       SI
+  Date:         2019-02-08
+  Field:        cancel_level
+  Signal Value: 1555.0
+  Actual Close: 15.7730
+  Ratio:        98.586x
+  Type:         BUY
+  Suggestion:   Ratio 98.59x -- severe, needs manual review
+  Raw Text:     A close below 1555 will cancel the buy signal.
+
+------------------------------------------------------------
+

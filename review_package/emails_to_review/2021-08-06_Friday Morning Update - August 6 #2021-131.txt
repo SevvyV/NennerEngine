@@ -1,0 +1,19 @@
+EMAIL ID: 952
+DATE:     2021-08-06
+SUBJECT:  Friday Morning Update - August 6 #2021-131
+FLAGGED SIGNALS: 1
+================================================================================
+
+  Signal #46759  [MANUAL]
+  Ticker:       LBS
+  Date:         2021-08-06
+  Field:        cancel_level
+  Signal Value: 37.5
+  Actual Close: 551.6000
+  Ratio:        0.068x
+  Type:         BUY
+  Suggestion:   Ratio 0.07x -- severe, needs manual review
+  Raw Text:     CUT continues on a buy signal as long as there is no close below 37.50.
+
+------------------------------------------------------------
+

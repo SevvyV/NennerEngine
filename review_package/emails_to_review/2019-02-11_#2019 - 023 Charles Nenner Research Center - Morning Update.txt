@@ -1,0 +1,19 @@
+EMAIL ID: 70
+DATE:     2019-02-11
+SUBJECT:  #2019 - 023 Charles Nenner Research Center - Morning Update  -  Monday, February 11, 2019
+FLAGGED SIGNALS: 1
+================================================================================
+
+  Signal #40174  [MANUAL]
+  Ticker:       SI
+  Date:         2019-02-11
+  Field:        cancel_level
+  Signal Value: 15555.0
+  Actual Close: 15.6570
+  Ratio:        993.485x
+  Type:         SELL
+  Suggestion:   Ratio 993.49x -- severe, needs manual review
+  Raw Text:     Gold will cancel the sell signal below 1302 and silver below 15555.
+
+------------------------------------------------------------
+

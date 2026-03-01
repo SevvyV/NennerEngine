@@ -1,0 +1,32 @@
+EMAIL ID: 1421
+DATE:     2022-12-16
+SUBJECT:  Friday Morning Update - December 16 #2022-197
+FLAGGED SIGNALS: 2
+================================================================================
+
+  Signal #55066  [MANUAL]
+  Ticker:       AUD/USD
+  Date:         2022-12-16
+  Field:        cancel_level
+  Signal Value: 0.0671
+  Actual Close: 0.6706
+  Ratio:        0.100x
+  Type:         SELL
+  Suggestion:   Ratio 0.10x -- large deviation
+  Raw Text:     Is back on a sell signal from 0.6800 and reached our short term downside price target of 0.6700. The sell signal continues as long as there is no close above .06710.
+
+------------------------------------------------------------
+
+  Signal #55054  [MANUAL]
+  Ticker:       ZS
+  Date:         2022-12-16
+  Field:        origin_price
+  Signal Value: 14075.0
+  Actual Close: 1480.0000
+  Ratio:        9.510x
+  Type:         SELL
+  Suggestion:   Ratio 9.51x -- large deviation
+  Raw Text:     Continues on a sell signal from 14,075 as long as there is no close above 1,480.
+
+------------------------------------------------------------
+

@@ -1,0 +1,19 @@
+EMAIL ID: 1392
+DATE:     2022-11-15
+SUBJECT:  ✳ Intraday #86
+FLAGGED SIGNALS: 1
+================================================================================
+
+  Signal #54405  [MANUAL]
+  Ticker:       YM
+  Date:         2022-11-15
+  Field:        cancel_level
+  Signal Value: 334.0
+  Actual Close: 33605.0000
+  Ratio:        0.010x
+  Type:         BUY
+  Suggestion:   Ratio 0.01x -- severe, needs manual review
+  Raw Text:     The buy signal continues as long as there is no close below the support line of around 334.
+
+------------------------------------------------------------
+

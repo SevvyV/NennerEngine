@@ -18,28 +18,14 @@ echo.
 echo  Starting Claude Code...
 echo.
 
-REM Check multiple known locations for claude.exe
-set "CLAUDE_EXE="
-
-REM Location 1: E:\Claude\claude-code (custom install path)
-for /d %%d in ("E:\Claude\claude-code\*") do (
-    if exist "%%d\claude.exe" set "CLAUDE_EXE=%%d\claude.exe"
-)
-
-REM Location 2: %APPDATA%\Claude\claude-code (default install path)
-if not defined CLAUDE_EXE (
-    for /d %%d in ("%APPDATA%\Claude\claude-code\*") do (
-        if exist "%%d\claude.exe" set "CLAUDE_EXE=%%d\claude.exe"
-    )
-)
-
-if defined CLAUDE_EXE (
-    "%CLAUDE_EXE%"
+REM Use the PATH-resolved claude (standalone CLI at %USERPROFILE%\.local\bin)
+where claude >nul 2>nul
+if %errorlevel%==0 (
+    claude
     goto :eof
 )
 
-echo  ERROR: Could not find claude.exe
-echo  Searched: E:\Claude\claude-code
-echo  Searched: %APPDATA%\Claude\claude-code
+echo  ERROR: Could not find claude in PATH
+echo  Expected: %USERPROFILE%\.local\bin\claude
 echo  Please reinstall Claude Code.
 pause

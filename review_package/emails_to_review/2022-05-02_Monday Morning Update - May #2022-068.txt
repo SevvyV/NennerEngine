@@ -1,0 +1,19 @@
+EMAIL ID: 1201
+DATE:     2022-05-02
+SUBJECT:  Monday Morning Update - May #2022-068
+FLAGGED SIGNALS: 1
+================================================================================
+
+  Signal #50967  [MANUAL]
+  Ticker:       ZW
+  Date:         2022-05-02
+  Field:        cancel_level
+  Signal Value: 10.5
+  Actual Close: 1043.5000
+  Ratio:        0.010x
+  Type:         BUY
+  Suggestion:   Ratio 0.01x -- severe, needs manual review
+  Raw Text:     Cancelled the buy signal since there was a close below 10.50.
+
+------------------------------------------------------------
+

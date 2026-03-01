@@ -1,0 +1,19 @@
+EMAIL ID: 1092
+DATE:     2022-01-06
+SUBJECT:  ✳ Intraday # 002 - DIA, S&P, Nasdaq, GDXJ, Silver, Crude, Bonds & Bitcoin
+FLAGGED SIGNALS: 1
+================================================================================
+
+  Signal #49130  [MANUAL]
+  Ticker:       YM
+  Date:         2022-01-06
+  Field:        cancel_level
+  Signal Value: 362.0
+  Actual Close: 36123.0000
+  Ratio:        0.010x
+  Type:         BUY
+  Suggestion:   Ratio 0.01x -- severe, needs manual review
+  Raw Text:     we are holding long only DIA as long as there is no close below 362
+
+------------------------------------------------------------
+

@@ -1,0 +1,19 @@
+EMAIL ID: 462
+DATE:     2020-04-21
+SUBJECT:  ‼ Special Edition Update - April 21 #2020-059
+FLAGGED SIGNALS: 1
+================================================================================
+
+  Signal #42418  [MANUAL]
+  Ticker:       YM
+  Date:         2020-04-21
+  Field:        cancel_level
+  Signal Value: 2347.0
+  Actual Close: 22929.0000
+  Ratio:        0.102x
+  Type:         SELL
+  Suggestion:   Ratio 0.10x -- large deviation
+  Raw Text:     An hourly close below 2,347 will be a sell signal.
+
+------------------------------------------------------------
+

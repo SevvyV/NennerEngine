@@ -1,0 +1,32 @@
+EMAIL ID: 790
+DATE:     2021-02-28
+SUBJECT:  Sunday Cycle Chart - February 28 #2021 -037
+FLAGGED SIGNALS: 2
+================================================================================
+
+  Signal #44910  [MANUAL]
+  Ticker:       NYFANG
+  Date:         2021-02-28
+  Field:        origin_price
+  Signal Value: 320.0
+  Actual Close: 6775.5601
+  Ratio:        0.047x
+  Type:         SELL
+  Suggestion:   Ratio 0.05x -- severe, needs manual review
+  Raw Text:     The QQQ closed below the channel, around 320, and is on a sell signal.
+
+------------------------------------------------------------
+
+  Signal #44910  [MANUAL]
+  Ticker:       NYFANG
+  Date:         2021-02-28
+  Field:        cancel_level
+  Signal Value: 320.0
+  Actual Close: 6775.5601
+  Ratio:        0.047x
+  Type:         SELL
+  Suggestion:   Ratio 0.05x -- severe, needs manual review
+  Raw Text:     The QQQ closed below the channel, around 320, and is on a sell signal.
+
+------------------------------------------------------------
+

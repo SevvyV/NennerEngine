@@ -1,0 +1,19 @@
+EMAIL ID: 973
+DATE:     2021-08-27
+SUBJECT:  Friday Morning Update - August 27 #2021-144
+FLAGGED SIGNALS: 1
+================================================================================
+
+  Signal #47021  [MANUAL]
+  Ticker:       LBS
+  Date:         2021-08-27
+  Field:        cancel_level
+  Signal Value: 38.7
+  Actual Close: 485.2000
+  Ratio:        0.080x
+  Type:         SELL
+  Suggestion:   Ratio 0.08x -- severe, needs manual review
+  Raw Text:     The short term cycles are up for two weeks but a close above 550 will lead to a bounce. CUT closed one tick above our level of 38.70 with a close of 38.71 which is not convincing enough. The sell signal continues until we get a good close above 38.70.
+
+------------------------------------------------------------
+

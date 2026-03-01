@@ -1,0 +1,19 @@
+EMAIL ID: 65
+DATE:     2019-02-06
+SUBJECT:  #2019 – 021 Charles Nenner Research Center – Morning Update  –  Wednesday, February 6, 2019
+FLAGGED SIGNALS: 1
+================================================================================
+
+  Signal #40156  [MANUAL]
+  Ticker:       AEX
+  Date:         2019-02-06
+  Field:        cancel_level
+  Signal Value: 11080.0
+  Actual Close: 536.6300
+  Ratio:        20.647x
+  Type:         BUY
+  Suggestion:   Value 11080 looks like DAX, not AEX (~537)
+  Raw Text:     The following closes below will give a sell signal: DAX 11080
+
+------------------------------------------------------------
+

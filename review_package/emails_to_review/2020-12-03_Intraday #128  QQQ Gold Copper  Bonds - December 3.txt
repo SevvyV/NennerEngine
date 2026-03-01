@@ -1,0 +1,19 @@
+EMAIL ID: 699
+DATE:     2020-12-03
+SUBJECT:  ❇ Intraday #128 – QQQ, Gold, Copper & Bonds - December 3
+FLAGGED SIGNALS: 1
+================================================================================
+
+  Signal #44241  [MANUAL]
+  Ticker:       ZB
+  Date:         2020-12-03
+  Field:        cancel_level
+  Signal Value: 17306.0
+  Actual Close: 171.9062
+  Ratio:        100.671x
+  Type:         BUY
+  Suggestion:   Ratio 100.67x -- severe, needs manual review
+  Raw Text:     a close above the trendline, around 17,306, will be a buy signal.
+
+------------------------------------------------------------
+

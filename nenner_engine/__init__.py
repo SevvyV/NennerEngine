@@ -113,12 +113,16 @@ from .stanley import (
     store_brief,
     get_latest_brief,
 )
+from .postmaster import (
+    send_email,
+    wrap_document,
+    markdown_to_html,
+)
 from .stock_report import (
     generate_and_send_stock_report,
     generate_stock_report_on_demand,
     gather_report_data,
     build_stock_report_html,
-    send_email,
     FOCUS_STOCKS,
 )
 
@@ -166,8 +170,10 @@ __all__ = [
     "generate_morning_brief", "generate_brief_on_demand",
     "get_knowledge_base", "add_knowledge", "deactivate_knowledge",
     "list_knowledge", "store_brief", "get_latest_brief",
+    # Postmaster (email formatting & delivery)
+    "send_email", "wrap_document", "markdown_to_html",
     # Stock Report
     "generate_and_send_stock_report", "generate_stock_report_on_demand",
     "gather_report_data", "build_stock_report_html",
-    "send_email", "FOCUS_STOCKS",
+    "FOCUS_STOCKS",
 ]

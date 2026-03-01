@@ -1,0 +1,19 @@
+EMAIL ID: 1085
+DATE:     2021-12-30
+SUBJECT:  ✳ Intraday #105 – S&P, DIA, Nasdaq, Silver, Yen & Bitcoin
+FLAGGED SIGNALS: 1
+================================================================================
+
+  Signal #49003  [MANUAL]
+  Ticker:       YM
+  Date:         2021-12-30
+  Field:        cancel_level
+  Signal Value: 365.0
+  Actual Close: 36291.0000
+  Ratio:        0.010x
+  Type:         BUY
+  Suggestion:   Ratio 0.01x -- severe, needs manual review
+  Raw Text:     Very short term the buy signal will be canceled on a close below the support line, around 365.
+
+------------------------------------------------------------
+

@@ -1,0 +1,32 @@
+EMAIL ID: 251
+DATE:     2019-10-13
+SUBJECT:  Sunday & Monday Morning Update - October 13 & 14 #2019-158
+FLAGGED SIGNALS: 2
+================================================================================
+
+  Signal #41467  [MANUAL]
+  Ticker:       ZC
+  Date:         2019-10-13
+  Field:        origin_price
+  Signal Value: 3.92
+  Actual Close: 397.7500
+  Ratio:        0.010x
+  Type:         BUY
+  Suggestion:   Ratio 0.01x -- severe, needs manual review
+  Raw Text:     We are long corn since our buy signal was 3.92. We keep a sell stop for Dec corn about 3.82.
+
+------------------------------------------------------------
+
+  Signal #41467  [MANUAL]
+  Ticker:       ZC
+  Date:         2019-10-13
+  Field:        cancel_level
+  Signal Value: 3.82
+  Actual Close: 397.7500
+  Ratio:        0.010x
+  Type:         BUY
+  Suggestion:   Ratio 0.01x -- severe, needs manual review
+  Raw Text:     We are long corn since our buy signal was 3.92. We keep a sell stop for Dec corn about 3.82.
+
+------------------------------------------------------------
+

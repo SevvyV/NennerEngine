@@ -1,0 +1,32 @@
+EMAIL ID: 825
+DATE:     2021-04-11
+SUBJECT:  Sunday Cycle Chart - April 11 #2021 -060
+FLAGGED SIGNALS: 2
+================================================================================
+
+  Signal #45286  [MANUAL]
+  Ticker:       ZW
+  Date:         2021-04-11
+  Field:        origin_price
+  Signal Value: 6.1
+  Actual Close: 638.7500
+  Ratio:        0.010x
+  Type:         BUY
+  Suggestion:   Ratio 0.01x -- severe, needs manual review
+  Raw Text:     we went long WEAT on April 8 since it closed above 6.10. We now set our sell stop to below 6
+
+------------------------------------------------------------
+
+  Signal #45286  [MANUAL]
+  Ticker:       ZW
+  Date:         2021-04-11
+  Field:        cancel_level
+  Signal Value: 6.0
+  Actual Close: 638.7500
+  Ratio:        0.009x
+  Type:         BUY
+  Suggestion:   Ratio 0.01x -- severe, needs manual review
+  Raw Text:     we went long WEAT on April 8 since it closed above 6.10. We now set our sell stop to below 6
+
+------------------------------------------------------------
+

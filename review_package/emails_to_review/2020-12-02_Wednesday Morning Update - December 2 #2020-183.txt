@@ -1,0 +1,19 @@
+EMAIL ID: 696
+DATE:     2020-12-02
+SUBJECT:  Wednesday Morning Update - December 2 #2020-183
+FLAGGED SIGNALS: 1
+================================================================================
+
+  Signal #44247  [MANUAL]
+  Ticker:       TSX
+  Date:         2020-12-02
+  Field:        cancel_level
+  Signal Value: 172.5
+  Actual Close: 17358.1992
+  Ratio:        0.010x
+  Type:         SELL
+  Suggestion:   Ratio 0.01x -- severe, needs manual review
+  Raw Text:     a close below 172.50 will be a sell signal
+
+------------------------------------------------------------
+

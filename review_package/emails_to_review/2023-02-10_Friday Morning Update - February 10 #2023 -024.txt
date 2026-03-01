@@ -1,0 +1,19 @@
+EMAIL ID: 1470
+DATE:     2023-02-10
+SUBJECT:  Friday Morning Update - February 10 #2023 -024
+FLAGGED SIGNALS: 1
+================================================================================
+
+  Signal #55948  [MANUAL]
+  Ticker:       NQ
+  Date:         2023-02-10
+  Field:        cancel_level
+  Signal Value: 121420.0
+  Actual Close: 12346.2500
+  Ratio:        9.835x
+  Type:         BUY
+  Suggestion:   Ratio 9.83x -- large deviation
+  Raw Text:     A close for the Nasdaq below 121,420, Dow Jones below 33,700, and Fang below 5,400 is therefore needed to get equities on a sell signal.
+
+------------------------------------------------------------
+

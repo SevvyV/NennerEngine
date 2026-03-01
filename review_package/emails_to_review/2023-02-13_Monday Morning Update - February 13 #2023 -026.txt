@@ -1,0 +1,19 @@
+EMAIL ID: 1472
+DATE:     2023-02-13
+SUBJECT:  Monday Morning Update - February 13 #2023 -026
+FLAGGED SIGNALS: 1
+================================================================================
+
+  Signal #55998  [MANUAL]
+  Ticker:       ZW
+  Date:         2023-02-13
+  Field:        origin_price
+  Signal Value: 7.9
+  Actual Close: 792.0000
+  Ratio:        0.010x
+  Type:         BUY
+  Suggestion:   Ratio 0.01x -- severe, needs manual review
+  Raw Text:     The cycle is bottoming and gave a buy signal above 7.90. There is an upside price target of 8.20.
+
+------------------------------------------------------------
+

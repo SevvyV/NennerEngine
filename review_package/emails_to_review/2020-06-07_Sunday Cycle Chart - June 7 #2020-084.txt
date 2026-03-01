@@ -1,0 +1,19 @@
+EMAIL ID: 511
+DATE:     2020-06-07
+SUBJECT:  Sunday Cycle Chart - June 7 #2020-084
+FLAGGED SIGNALS: 1
+================================================================================
+
+  Signal #42766  [CHECK]
+  Ticker:       MMM
+  Date:         2020-06-07
+  Field:        cancel_level
+  Signal Value: 30.5
+  Actual Close: 113.8703
+  Ratio:        0.268x
+  Type:         BUY
+  Suggestion:   Ratio 0.27x -- moderate deviation
+  Raw Text:     Continues on a buy signal but soon the cycle reaches a high. Only a close below 30.50 will be a sell signal.
+
+------------------------------------------------------------
+

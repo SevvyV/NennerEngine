@@ -1,0 +1,19 @@
+EMAIL ID: 1492
+DATE:     2023-03-08
+SUBJECT:  Wednesday Morning Update - March 8 #2023 -038
+FLAGGED SIGNALS: 1
+================================================================================
+
+  Signal #56349  [MANUAL]
+  Ticker:       GDXJ
+  Date:         2023-03-08
+  Field:        cancel_level
+  Signal Value: 3350.0
+  Actual Close: 30.7256
+  Ratio:        109.030x
+  Type:         SELL
+  Suggestion:   Ratio 109.03x -- severe, needs manual review
+  Raw Text:     GDXJ gave a sell signal with a close below 3,350.
+
+------------------------------------------------------------
+

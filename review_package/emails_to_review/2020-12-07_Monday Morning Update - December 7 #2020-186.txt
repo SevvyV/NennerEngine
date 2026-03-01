@@ -1,0 +1,19 @@
+EMAIL ID: 702
+DATE:     2020-12-07
+SUBJECT:  Monday Morning Update - December 7 #2020-186
+FLAGGED SIGNALS: 1
+================================================================================
+
+  Signal #44298  [MANUAL]
+  Ticker:       TSX
+  Date:         2020-12-07
+  Field:        cancel_level
+  Signal Value: 172.5
+  Actual Close: 17582.4004
+  Ratio:        0.010x
+  Type:         BUY
+  Suggestion:   Ratio 0.01x -- severe, needs manual review
+  Raw Text:     A close below 172.50 will cancel the buy signal.
+
+------------------------------------------------------------
+

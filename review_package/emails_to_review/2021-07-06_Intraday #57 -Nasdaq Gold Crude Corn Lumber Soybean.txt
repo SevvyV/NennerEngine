@@ -1,0 +1,19 @@
+EMAIL ID: 921
+DATE:     2021-07-06
+SUBJECT:  ❇  Intraday #57 - Nasdaq, Gold, Crude, Corn, Lumber, Soybeans, Wheat, TLT & Bitcoin
+FLAGGED SIGNALS: 1
+================================================================================
+
+  Signal #46317  [MANUAL]
+  Ticker:       LBS
+  Date:         2021-07-06
+  Field:        cancel_level
+  Signal Value: 145.5
+  Actual Close: 792.9000
+  Ratio:        0.184x
+  Type:         BUY
+  Suggestion:   Ratio 0.18x -- large deviation
+  Raw Text:     A close below 145.50 will cancel the buy signal.
+
+------------------------------------------------------------
+

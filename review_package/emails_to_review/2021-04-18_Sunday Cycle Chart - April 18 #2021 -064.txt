@@ -1,0 +1,19 @@
+EMAIL ID: 831
+DATE:     2021-04-18
+SUBJECT:  Sunday Cycle Chart - April 18 #2021 -064
+FLAGGED SIGNALS: 1
+================================================================================
+
+  Signal #45365  [MANUAL]
+  Ticker:       ZW
+  Date:         2021-04-18
+  Field:        cancel_level
+  Signal Value: 6.2
+  Actual Close: 652.5000
+  Ratio:        0.010x
+  Type:         BUY
+  Suggestion:   Ratio 0.01x -- severe, needs manual review
+  Raw Text:     The buy signal continues and we are long WEAT. The up move continues as long as there is no close below 6.20.
+
+------------------------------------------------------------
+

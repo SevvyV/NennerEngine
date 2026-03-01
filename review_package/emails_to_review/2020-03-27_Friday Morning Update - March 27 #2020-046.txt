@@ -1,0 +1,32 @@
+EMAIL ID: 438
+DATE:     2020-03-27
+SUBJECT:  Friday Morning Update - March 27 #2020-046
+FLAGGED SIGNALS: 2
+================================================================================
+
+  Signal #42309  [MANUAL]
+  Ticker:       AEX
+  Date:         2020-03-27
+  Field:        cancel_level
+  Signal Value: 5720.0
+  Actual Close: 464.9300
+  Ratio:        12.303x
+  Type:         BUY
+  Suggestion:   Value 5720 looks like DAX, not AEX (~465)
+  Raw Text:     The following closes will cancel the buy signals: AEX a close below 5,720
+
+------------------------------------------------------------
+
+  Signal #42307  [MANUAL]
+  Ticker:       DAX
+  Date:         2020-03-27
+  Field:        cancel_level
+  Signal Value: 450.0
+  Actual Close: 9632.5195
+  Ratio:        0.047x
+  Type:         BUY
+  Suggestion:   Ratio 0.05x -- severe, needs manual review
+  Raw Text:     The following closes will cancel the buy signals: DAX a close below 450
+
+------------------------------------------------------------
+

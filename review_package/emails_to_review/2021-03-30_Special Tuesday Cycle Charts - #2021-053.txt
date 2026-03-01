@@ -1,0 +1,32 @@
+EMAIL ID: 815
+DATE:     2021-03-30
+SUBJECT:  Special Tuesday Cycle Charts - #2021-053
+FLAGGED SIGNALS: 2
+================================================================================
+
+  Signal #45174  [MANUAL]
+  Ticker:       ZW
+  Date:         2021-03-30
+  Field:        origin_price
+  Signal Value: 6.1
+  Actual Close: 601.7500
+  Ratio:        0.010x
+  Type:         BUY
+  Suggestion:   Ratio 0.01x -- severe, needs manual review
+  Raw Text:     Short term traders can buy the ETF WEAT on a close above 6.10 with a sell stop around 5.80.
+
+------------------------------------------------------------
+
+  Signal #45174  [MANUAL]
+  Ticker:       ZW
+  Date:         2021-03-30
+  Field:        cancel_level
+  Signal Value: 6.1
+  Actual Close: 601.7500
+  Ratio:        0.010x
+  Type:         BUY
+  Suggestion:   Ratio 0.01x -- severe, needs manual review
+  Raw Text:     Short term traders can buy the ETF WEAT on a close above 6.10 with a sell stop around 5.80.
+
+------------------------------------------------------------
+

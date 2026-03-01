@@ -1,0 +1,19 @@
+EMAIL ID: 1393
+DATE:     2022-11-16
+SUBJECT:  Wednesday Morning Update - November 16 #2022-180
+FLAGGED SIGNALS: 1
+================================================================================
+
+  Signal #54492  [MANUAL]
+  Ticker:       YM
+  Date:         2022-11-16
+  Field:        cancel_level
+  Signal Value: 3350.0
+  Actual Close: 33591.0000
+  Ratio:        0.100x
+  Type:         BUY
+  Suggestion:   Ratio 0.10x -- severe, needs manual review
+  Raw Text:     Dow Jones continues on a buy signal as long as there is no close below 3,350.
+
+------------------------------------------------------------
+

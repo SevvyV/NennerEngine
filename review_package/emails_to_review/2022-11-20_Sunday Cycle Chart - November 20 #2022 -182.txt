@@ -1,0 +1,19 @@
+EMAIL ID: 1396
+DATE:     2022-11-20
+SUBJECT:  Sunday Cycle Chart - November 20 #2022 -182
+FLAGGED SIGNALS: 1
+================================================================================
+
+  Signal #54486  [MANUAL]
+  Ticker:       YM
+  Date:         2022-11-20
+  Field:        cancel_level
+  Signal Value: 334.0
+  Actual Close: 33775.0000
+  Ratio:        0.010x
+  Type:         SELL
+  Suggestion:   Ratio 0.01x -- severe, needs manual review
+  Raw Text:     The support line was broken and a close below 334 will be a sell signal.
+
+------------------------------------------------------------
+

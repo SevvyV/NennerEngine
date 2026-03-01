@@ -1,0 +1,19 @@
+EMAIL ID: 1090
+DATE:     2022-01-04
+SUBJECT:  ✳Intraday #001 – DIA, GDXJ, Crude, Soybeans, Bonds, TLT, Bitcoin, AIG, AT&T, BBY & IBM
+FLAGGED SIGNALS: 1
+================================================================================
+
+  Signal #49070  [MANUAL]
+  Ticker:       YM
+  Date:         2022-01-04
+  Field:        cancel_level
+  Signal Value: 366.0
+  Actual Close: 36675.0000
+  Ratio:        0.010x
+  Type:         BUY
+  Suggestion:   Ratio 0.01x -- severe, needs manual review
+  Raw Text:     Investors that are long DIA should continue long as long as there is no close below the support line, around 366.
+
+------------------------------------------------------------
+

@@ -1,0 +1,19 @@
+EMAIL ID: 224
+DATE:     2019-09-08
+SUBJECT:  Sunday Cycle Charts - September 8 - #2019-139
+FLAGGED SIGNALS: 1
+================================================================================
+
+  Signal #41277  [MANUAL]
+  Ticker:       ZC
+  Date:         2019-09-08
+  Field:        cancel_level
+  Signal Value: 3.71
+  Actual Close: 342.5000
+  Ratio:        0.011x
+  Type:         SELL
+  Suggestion:   Ratio 0.01x -- severe, needs manual review
+  Raw Text:     A close above 3.71 will cancel the sell signal.
+
+------------------------------------------------------------
+

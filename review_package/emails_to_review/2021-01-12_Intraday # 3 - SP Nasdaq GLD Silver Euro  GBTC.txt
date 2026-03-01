@@ -1,0 +1,19 @@
+EMAIL ID: 737
+DATE:     2021-01-12
+SUBJECT:  ❇ Intraday # 3 - S&P, Nasdaq, GLD, Silver, Euro & GBTC
+FLAGGED SIGNALS: 1
+================================================================================
+
+  Signal #44541  [MANUAL]
+  Ticker:       EUR/USD
+  Date:         2021-01-12
+  Field:        cancel_level
+  Signal Value: 22.0
+  Actual Close: 1.2161
+  Ratio:        18.091x
+  Type:         SELL
+  Suggestion:   Ratio 18.09x -- severe, needs manual review
+  Raw Text:     The Euro gave the projected sell signal below 22 but for now we do not expect a serious correction.
+
+------------------------------------------------------------
+

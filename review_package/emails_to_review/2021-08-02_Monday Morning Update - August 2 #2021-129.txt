@@ -1,0 +1,19 @@
+EMAIL ID: 949
+DATE:     2021-08-02
+SUBJECT:  Monday Morning Update - August 2 #2021-129
+FLAGGED SIGNALS: 1
+================================================================================
+
+  Signal #46640  [MANUAL]
+  Ticker:       ZS
+  Date:         2021-08-02
+  Field:        cancel_level
+  Signal Value: 30.8
+  Actual Close: 1418.7500
+  Ratio:        0.022x
+  Type:         SELL
+  Suggestion:   Value 30.8 looks like SOYB ETF, not ZS futures (~1419)
+  Raw Text:     Continue on a sell signal as long as there is no close above 30.80.
+
+------------------------------------------------------------
+

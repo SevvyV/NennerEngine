@@ -1,0 +1,19 @@
+EMAIL ID: 1511
+DATE:     2023-03-27
+SUBJECT:  Monday Morning Update - March 27 #2023 -049
+FLAGGED SIGNALS: 1
+================================================================================
+
+  Signal #56679  [CHECK]
+  Ticker:       NG
+  Date:         2023-03-27
+  Field:        cancel_level
+  Signal Value: 6.46
+  Actual Close: 2.0880
+  Ratio:        3.094x
+  Type:         SELL
+  Suggestion:   Ratio 3.09x -- moderate deviation
+  Raw Text:     There could be small a bounce if there is a close above 6.46.
+
+------------------------------------------------------------
+

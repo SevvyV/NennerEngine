@@ -1,0 +1,19 @@
+EMAIL ID: 923
+DATE:     2021-07-07
+SUBJECT:  Wednesday Morning Update - July 7 #2021-115
+FLAGGED SIGNALS: 1
+================================================================================
+
+  Signal #46390  [MANUAL]
+  Ticker:       LBS
+  Date:         2021-07-07
+  Field:        cancel_level
+  Signal Value: 38.0
+  Actual Close: 780.0000
+  Ratio:        0.049x
+  Type:         SELL
+  Suggestion:   Ratio 0.05x -- severe, needs manual review
+  Raw Text:     CUT - the sell signal continues as long as there is no close above 38.
+
+------------------------------------------------------------
+

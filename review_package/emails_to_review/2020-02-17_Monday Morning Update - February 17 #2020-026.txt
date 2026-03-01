@@ -1,0 +1,19 @@
+EMAIL ID: 382
+DATE:     2020-02-17
+SUBJECT:  Monday Morning Update - February 17 #2020-026
+FLAGGED SIGNALS: 1
+================================================================================
+
+  Signal #42115  [MANUAL]
+  Ticker:       EUR/USD
+  Date:         2020-02-17
+  Field:        origin_price
+  Signal Value: 11.0
+  Actual Close: 1.0842
+  Ratio:        10.146x
+  Type:         SELL
+  Suggestion:   Ratio 10.15x -- severe, needs manual review
+  Raw Text:     The Euro continues on a sell signal from 11 based on a short term cycle low. We can see a bounce if there is a close above 108.70
+
+------------------------------------------------------------
+

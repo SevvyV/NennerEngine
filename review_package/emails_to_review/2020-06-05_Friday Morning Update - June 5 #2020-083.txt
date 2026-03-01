@@ -1,0 +1,19 @@
+EMAIL ID: 510
+DATE:     2020-06-05
+SUBJECT:  Friday Morning Update - June 5 #2020-083
+FLAGGED SIGNALS: 1
+================================================================================
+
+  Signal #42803  [MANUAL]
+  Ticker:       TSX
+  Date:         2020-06-05
+  Field:        cancel_level
+  Signal Value: 153.1
+  Actual Close: 15854.0996
+  Ratio:        0.010x
+  Type:         BUY
+  Suggestion:   Ratio 0.01x -- severe, needs manual review
+  Raw Text:     Our upside price target has bee reached but only a close below 153.10 will cancel the buy signal.
+
+------------------------------------------------------------
+

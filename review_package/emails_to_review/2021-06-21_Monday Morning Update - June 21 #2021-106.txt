@@ -1,0 +1,19 @@
+EMAIL ID: 905
+DATE:     2021-06-21
+SUBJECT:  Monday Morning Update - June 21 #2021-106
+FLAGGED SIGNALS: 1
+================================================================================
+
+  Signal #46197  [MANUAL]
+  Ticker:       ZC
+  Date:         2021-06-21
+  Field:        cancel_level
+  Signal Value: 5.8
+  Actual Close: 659.2500
+  Ratio:        0.009x
+  Type:         SELL
+  Suggestion:   Ratio 0.01x -- severe, needs manual review
+  Raw Text:     A close above 5.80 is still needed to cancel the sell signal.
+
+------------------------------------------------------------
+

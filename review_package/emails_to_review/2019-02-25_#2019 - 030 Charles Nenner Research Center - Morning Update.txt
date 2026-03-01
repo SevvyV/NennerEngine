@@ -1,0 +1,19 @@
+EMAIL ID: 81
+DATE:     2019-02-25
+SUBJECT:  #2019 - 030 Charles Nenner Research Center - Morning Update - Monday, February 25, 2019
+FLAGGED SIGNALS: 1
+================================================================================
+
+  Signal #40212  [MANUAL]
+  Ticker:       ZB
+  Date:         2019-02-25
+  Field:        cancel_level
+  Signal Value: 1145.25
+  Actual Close: 146.1250
+  Ratio:        7.837x
+  Type:         SELL
+  Suggestion:   Ratio 7.84x -- large deviation
+  Raw Text:     US 30 year below 1145.25
+
+------------------------------------------------------------
+

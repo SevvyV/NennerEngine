@@ -1,0 +1,66 @@
+================================================================================
+REMAINING AMBIGUOUS ITEMS AFTER PHASE 2 FIXES
+Generated: 2026-02-26 23:09
+Total: 12 items (down from 85)
+================================================================================
+
+ 1. Signal #41044  YM  2019-07-12
+    cancel_level = 6800  (actual close: 27309)
+    Dow was 27309. 6800 doesn't match any known instrument.    *** Should be 26700 ***
+    Suggestion: DELETE or leave — genuinely unidentifiable
+
+ 2. Signal #42418  YM  2020-04-21
+    cancel_level = 2347  (actual close: 22929)							
+    User said 'Ignore' — hourly/day trading service signal.     *** Remove this signal from the database completely ***
+    Suggestion: LEAVE as-is (day trading service, different instrument)
+
+ 3. Signal #44423  YM  2020-12-27
+    cancel_level = 3440  (actual close: 30109)                       **** No signal given. Potential upside of 30,600 ***
+    ES (S&P) was 3727. Cancel at 3440 is plausible S&P support.
+    Suggestion: Likely ES/S&P level misattributed to YM. Consider changing ticker to ES.
+
+ 4. Signal #46692  YM  2021-08-04
+    cancel_level = 3850  (actual close: 34690)              ***34,850 cancel level for DOW
+    ES (S&P) was 4394. 3850 could be S&P or DIA-like.		****It said no change, so look at the previous e-mails"
+    Suggestion: Likely cross-instrument. Consider changing ticker to ES.
+
+ 5. Signal #44910  NYFANG  2021-02-28
+    origin+cancel = 320  (actual close: 6775)							
+    Raw text explicitly says 'QQQ closed below 320'. QQQ was ~320.       *QQQ closed below 320 is now on sell signal ***
+    Suggestion: Signal is for QQQ, not NYFANG. DELETE or re-attribute.
+
+ 6. Signal #47652  FXE  2021-10-10					
+    cancel_level = 19.5  (actual close: 102.68)				*** Complete error. Remove from database ***
+    FXE was 102.68. 19.5 doesn't match any obvious instrument.
+    Suggestion: Possibly SLV (~20.9) or misattributed. DELETE or leave.
+
+ 7. Signal #47657  FXE  2021-10-10
+    origin+cancel = 19.5  (actual close: 102.68)			*** Complete error. Remove from database ***
+    Same issue as #47652. From same/duplicate email.				
+    Suggestion: Possibly SLV (~20.9) or misattributed. DELETE or leave.
+
+ 8. Signal #49461  GDXJ  2022-01-28
+    origin_price = 140  (actual close: 34.94)
+    GDXJ was 34.94. 140 is exactly 4x — possible pre-split artifact?		*** should be 40 ***
+    Suggestion: Unclear. Could be stale or wrong instrument.
+
+ 9. Signal #52413  GS  2022-07-24
+    cancel_level = 34  (actual close: 296.23)		*** bad parsing, was talking about GM Remove GM from database***
+    GS was 296. 34 doesn't match any instrument cleanly.
+    Suggestion: Likely misattributed from another instrument in same email.
+
+10. Signal #46317  LBS  2021-07-06				
+    cancel_level = 145.5  (actual close: 792.9)			*** Intraday service *** different instrument
+    Lumber was 792.9. TLT was 126, not 145.5. No match found.
+    Suggestion: Likely misattributed from multi-instrument intraday email.
+
+11. Signal #43412  ZC  2020-08-18
+    cancel_level = 12.11  (actual close: 327)				
+    User noted: 'may be referring to CORN ETF'. Not ZC notation.	*** Intraday - remove signal ***
+    Suggestion: Change ticker to CORN or leave with note.
+
+12. Signal #56679  NG  2023-03-27
+    cancel_level = 6.46  (actual close: 2.088)			***Cancel level is 2.46"***
+    NG was 2.09 but was ~6.46 in Nov 2022. Stale resistance?
+    Suggestion: Could be legitimate stale level or UNG ETF. LEAVE as-is.
+

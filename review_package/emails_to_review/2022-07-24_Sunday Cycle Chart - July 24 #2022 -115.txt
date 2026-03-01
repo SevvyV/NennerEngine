@@ -1,0 +1,19 @@
+EMAIL ID: 1284
+DATE:     2022-07-24
+SUBJECT:  Sunday Cycle Chart - July 24 #2022 -115
+FLAGGED SIGNALS: 1
+================================================================================
+
+  Signal #52413  [MANUAL]
+  Ticker:       GS
+  Date:         2022-07-24
+  Field:        cancel_level
+  Signal Value: 34.0
+  Actual Close: 296.2280
+  Ratio:        0.115x
+  Type:         SELL
+  Suggestion:   Ratio 0.11x -- large deviation
+  Raw Text:     However, short term traders can keep a sell signal just below 34.
+
+------------------------------------------------------------
+

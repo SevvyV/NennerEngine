@@ -1,0 +1,32 @@
+EMAIL ID: 72
+DATE:     2019-02-13
+SUBJECT:  #2019 - 024 Charles Nenner Research Center - Morning Update  -  Wednesday, February 13, 2019
+FLAGGED SIGNALS: 2
+================================================================================
+
+  Signal #40192  [MANUAL]
+  Ticker:       SI
+  Date:         2019-02-13
+  Field:        cancel_level
+  Signal Value: 1558.0
+  Actual Close: 15.6240
+  Ratio:        99.718x
+  Type:         BUY
+  Suggestion:   Ratio 99.72x -- severe, needs manual review
+  Raw Text:     A below 1558 will be a sell signal.
+
+------------------------------------------------------------
+
+  Signal #40190  [MANUAL]
+  Ticker:       VIX
+  Date:         2019-02-13
+  Field:        cancel_level
+  Signal Value: 1820.0
+  Actual Close: 15.6500
+  Ratio:        116.294x
+  Type:         SELL
+  Suggestion:   Value 1820 way too high for VIX (~15.6)
+  Raw Text:     The sell signal continues as long as there is no close above 1820.
+
+------------------------------------------------------------
+

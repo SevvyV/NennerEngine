@@ -1,0 +1,19 @@
+EMAIL ID: 374
+DATE:     2020-02-10
+SUBJECT:  Monday Morning Update - February 10 #2020-022
+FLAGGED SIGNALS: 1
+================================================================================
+
+  Signal #42070  [MANUAL]
+  Ticker:       NG
+  Date:         2020-02-10
+  Field:        cancel_level
+  Signal Value: 15.4
+  Actual Close: 1.7660
+  Ratio:        8.720x
+  Type:         BUY
+  Suggestion:   Ratio 8.72x -- large deviation
+  Raw Text:     We will have a buy signal on a close above 15.40
+
+------------------------------------------------------------
+

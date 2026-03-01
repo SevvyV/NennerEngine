@@ -1,0 +1,58 @@
+EMAIL ID: 247
+DATE:     2019-10-06
+SUBJECT:  Sunday Morning Update - October 6 #2019-154
+FLAGGED SIGNALS: 4
+================================================================================
+
+  Signal #41400  [MANUAL]
+  Ticker:       ZC
+  Date:         2019-10-06
+  Field:        origin_price
+  Signal Value: 3.92
+  Actual Close: 384.7500
+  Ratio:        0.010x
+  Type:         BUY
+  Suggestion:   Ratio 0.01x -- severe, needs manual review
+  Raw Text:     A close above 3.92 for December futures will be a buy signal.
+
+------------------------------------------------------------
+
+  Signal #41400  [MANUAL]
+  Ticker:       ZC
+  Date:         2019-10-06
+  Field:        cancel_level
+  Signal Value: 3.92
+  Actual Close: 384.7500
+  Ratio:        0.010x
+  Type:         BUY
+  Suggestion:   Ratio 0.01x -- severe, needs manual review
+  Raw Text:     A close above 3.92 for December futures will be a buy signal.
+
+------------------------------------------------------------
+
+  Signal #41401  [MANUAL]
+  Ticker:       ZS
+  Date:         2019-10-06
+  Field:        origin_price
+  Signal Value: 9.25
+  Actual Close: 916.2500
+  Ratio:        0.010x
+  Type:         BUY
+  Suggestion:   Value 9.25 looks like SOYB ETF, not ZS futures (~916)
+  Raw Text:     A close above 9.25 is needed for a buy signal.
+
+------------------------------------------------------------
+
+  Signal #41401  [MANUAL]
+  Ticker:       ZS
+  Date:         2019-10-06
+  Field:        cancel_level
+  Signal Value: 9.25
+  Actual Close: 916.2500
+  Ratio:        0.010x
+  Type:         BUY
+  Suggestion:   Value 9.25 looks like SOYB ETF, not ZS futures (~916)
+  Raw Text:     A close above 9.25 is needed for a buy signal.
+
+------------------------------------------------------------
+

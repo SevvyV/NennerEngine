@@ -1,0 +1,19 @@
+EMAIL ID: 863
+DATE:     2021-05-14
+SUBJECT:  Commodities Update - 2021-081
+FLAGGED SIGNALS: 1
+================================================================================
+
+  Signal #45701  [MANUAL]
+  Ticker:       ZS
+  Date:         2021-05-14
+  Field:        cancel_level
+  Signal Value: 14.5
+  Actual Close: 1603.7500
+  Ratio:        0.009x
+  Type:         BUY
+  Suggestion:   Value 14.5 looks like SOYB ETF, not ZS futures (~1604)
+  Raw Text:     Canceled the buy signal since there was a close below 14.50.
+
+------------------------------------------------------------
+

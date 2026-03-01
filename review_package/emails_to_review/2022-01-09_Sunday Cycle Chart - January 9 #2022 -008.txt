@@ -1,0 +1,19 @@
+EMAIL ID: 1094
+DATE:     2022-01-09
+SUBJECT:  Sunday Cycle Chart - January 9 #2022 -008
+FLAGGED SIGNALS: 1
+================================================================================
+
+  Signal #49136  [MANUAL]
+  Ticker:       YM
+  Date:         2022-01-09
+  Field:        cancel_level
+  Signal Value: 362.0
+  Actual Close: 36107.0000
+  Ratio:        0.010x
+  Type:         BUY
+  Suggestion:   Ratio 0.01x -- severe, needs manual review
+  Raw Text:     we are still long DIA as long as there is no close below 362
+
+------------------------------------------------------------
+

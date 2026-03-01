@@ -1,0 +1,19 @@
+EMAIL ID: 594
+DATE:     2020-08-18
+SUBJECT:  ❇ Intraday #92 – S&P, Nasdaq, Euro, UNG, Corn & Nat Gas
+FLAGGED SIGNALS: 1
+================================================================================
+
+  Signal #43412  [MANUAL]
+  Ticker:       ZC
+  Date:         2020-08-18
+  Field:        cancel_level
+  Signal Value: 12.11
+  Actual Close: 327.0000
+  Ratio:        0.037x
+  Type:         BUY
+  Suggestion:   Ratio 0.04x -- severe, needs manual review
+  Raw Text:     Our long position is up 20% and our sell signal will be a close below 12.11.
+
+------------------------------------------------------------
+

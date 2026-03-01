@@ -1,0 +1,32 @@
+EMAIL ID: 1496
+DATE:     2023-03-13
+SUBJECT:  Monday Morning Update - March 13 #2023 -041
+FLAGGED SIGNALS: 2
+================================================================================
+
+  Signal #56448  [MANUAL]
+  Ticker:       LBS
+  Date:         2023-03-13
+  Field:        origin_price
+  Signal Value: 68.0
+  Actual Close: 353.6000
+  Ratio:        0.192x
+  Type:         BUY
+  Suggestion:   Ratio 0.19x -- large deviation
+  Raw Text:     Continues on a buy signal from 68 as long as there is no close below 395.
+
+------------------------------------------------------------
+
+  Signal #56447  [MANUAL]
+  Ticker:       ZS
+  Date:         2023-03-13
+  Field:        origin_price
+  Signal Value: 68.0
+  Actual Close: 1500.0000
+  Ratio:        0.045x
+  Type:         BUY
+  Suggestion:   Value 68.0 looks like SOYB ETF, not ZS futures (~1500)
+  Raw Text:     Continues on a buy signal from 68 as long as there is no close below 1,490.
+
+------------------------------------------------------------
+

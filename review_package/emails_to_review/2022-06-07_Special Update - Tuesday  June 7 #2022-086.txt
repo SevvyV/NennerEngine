@@ -1,0 +1,32 @@
+EMAIL ID: 1240
+DATE:     2022-06-07
+SUBJECT:  Special Update - Tuesday  June 7 #2022-086
+FLAGGED SIGNALS: 2
+================================================================================
+
+  Signal #51618  [MANUAL]
+  Ticker:       ZW
+  Date:         2022-06-07
+  Field:        origin_price
+  Signal Value: 11.4
+  Actual Close: 1071.7500
+  Ratio:        0.011x
+  Type:         SELL
+  Suggestion:   Ratio 0.01x -- severe, needs manual review
+  Raw Text:     WEAT continues on a sell signal from 11.40 as long as there is no close above 11.80.
+
+------------------------------------------------------------
+
+  Signal #51618  [MANUAL]
+  Ticker:       ZW
+  Date:         2022-06-07
+  Field:        cancel_level
+  Signal Value: 11.8
+  Actual Close: 1071.7500
+  Ratio:        0.011x
+  Type:         SELL
+  Suggestion:   Ratio 0.01x -- severe, needs manual review
+  Raw Text:     WEAT continues on a sell signal from 11.40 as long as there is no close above 11.80.
+
+------------------------------------------------------------
+

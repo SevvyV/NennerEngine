@@ -1,0 +1,95 @@
+================================================================================
+MANUAL REVIEW PACKAGE — SIGNAL PRICE AUDIT
+Generated: 2026-02-26 21:46
+================================================================================
+
+Total flagged items:  85
+  MANUAL:             79
+  CHECK (borderline): 6
+
+Unique emails:        69
+(These 85 items come from 69 distinct Nenner emails)
+
+--------------------------------------------------------------------------------
+PER-TICKER BREAKDOWN
+--------------------------------------------------------------------------------
+  AEX         :    2 items  (2 manual)
+  AUD/USD     :    2 items  (2 manual)
+  BTC         :    2 items  (2 manual)
+  DAX         :    1 items  (1 manual)
+  EUR/USD     :    2 items  (2 manual)
+  FXE         :    3 items  (3 manual)
+  GC          :    2 items  (2 manual)
+  GDXJ        :    2 items  (1 manual, 1 check)
+  GLD         :    2 items  (2 check)
+  GS          :    1 items  (1 manual)
+  LBS         :    6 items  (6 manual)
+  MMM         :    1 items  (1 check)
+  NG          :    2 items  (1 manual, 1 check)
+  NQ          :    1 items  (1 manual)
+  NYFANG      :    2 items  (2 manual)
+  SI          :    3 items  (3 manual)
+  TSX         :    3 items  (3 manual)
+  USD/CHF     :    1 items  (1 manual)
+  USD/JPY     :    1 items  (1 manual)
+  VIX         :    1 items  (1 manual)
+  YM          :   14 items  (13 manual, 1 check)
+  ZB          :    4 items  (4 manual)
+  ZC          :   11 items  (11 manual)
+  ZS          :    7 items  (7 manual)
+  ZW          :    9 items  (9 manual)
+
+--------------------------------------------------------------------------------
+COMMON PATTERNS (what to look for)
+--------------------------------------------------------------------------------
+
+  Other deviation: 27 items
+    e.g. #40156 AEX cancel_level: signal=11080.0, close=536.63, ratio=20.647x
+         "The following closes below will give a sell signal: DAX 11080"
+    e.g. #42309 AEX cancel_level: signal=5720.0, close=464.93, ratio=12.303x
+         "The following closes will cancel the buy signals: AEX a close below 5,720"
+    e.g. #55066 AUD/USD cancel_level: signal=0.0671, close=0.67, ratio=0.100x
+         "Is back on a sell signal from 0.6800 and reached our short term downside price target of 0.6700. The"
+    ... and 24 more
+
+  Value way too small (ETF or missing digits): 27 items
+    e.g. #42886 BTC origin_price: signal=96.0, close=9648.72, ratio=0.010x
+         "a close above the hourly trend line, around 96, will be a buy signal."
+    e.g. #42886 BTC cancel_level: signal=96.0, close=9648.72, ratio=0.010x
+         "a close above the hourly trend line, around 96, will be a buy signal."
+    e.g. #43136 GC cancel_level: signal=18.16, close=1808.30, ratio=0.010x
+         "The buy signal continues as long as there is not a close below 18.16."
+    ... and 24 more
+
+  ETF price attributed to futures/index: 22 items
+    e.g. #47652 FXE cancel_level: signal=19.5, close=102.68, ratio=0.190x
+         "The FXE will give a buy signal on a close above 19.50."
+    e.g. #47657 FXE origin_price: signal=19.5, close=102.68, ratio=0.190x
+         "The FXE will give a buy signal on a close above 19.50"
+    e.g. #47657 FXE cancel_level: signal=19.5, close=102.68, ratio=0.190x
+         "The FXE will give a buy signal on a close above 19.50"
+    ... and 19 more
+
+  Value way too large (parser comma/decimal issue): 9 items
+    e.g. #44876 AUD/USD cancel_level: signal=178.9, close=0.78, ratio=230.304x
+         "Continues on a sell signal as long as there is no close above 178.90 but he cycles are down."
+    e.g. #56349 GDXJ cancel_level: signal=3350.0, close=30.73, ratio=109.030x
+         "GDXJ gave a sell signal with a close below 3,350."
+    e.g. #40168 SI cancel_level: signal=1555.0, close=15.77, ratio=98.586x
+         "A close below 1555 will cancel the buy signal."
+    ... and 6 more
+
+--------------------------------------------------------------------------------
+HOW TO REVIEW
+--------------------------------------------------------------------------------
+
+1. Open manual_review_items.csv in Excel — sort/filter by ticker or severity
+2. For each item, look at the 'raw_text' column to see what the parser extracted
+3. Common issues to look for:
+   - DIA/QQQ/WEAT/SOYB ETF prices attributed to YM/NQ/ZW/ZS futures
+   - Comma-parsing errors (e.g., '121,420' parsed as 121420 for NQ)
+   - Silver values attributed to Gold (GC), or vice versa
+   - CUT (lumber ETF) prices attributed to LBS (lumber futures)
+   - Bond notation issues (ZB: 145.25 stored as 1145.25 or 17508)
+4. The 'emails_to_review' folder has one file per email for context
+5. Look up the original email by date + subject to see the full Nenner text

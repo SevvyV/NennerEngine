@@ -1,0 +1,19 @@
+EMAIL ID: 1000
+DATE:     2021-09-29
+SUBJECT:  Wednesday Morning Update - September 29 #2021-163
+FLAGGED SIGNALS: 1
+================================================================================
+
+  Signal #47476  [CHECK]
+  Ticker:       GLD
+  Date:         2021-09-29
+  Field:        cancel_level
+  Signal Value: 64.5
+  Actual Close: 161.3200
+  Ratio:        0.400x
+  Type:         SELL
+  Suggestion:   Ratio 0.40x -- moderate deviation
+  Raw Text:     Gold, GLD and GDXJ continue on a sell signal as long as we don't see the following closes: GLD above 64.50
+
+------------------------------------------------------------
+

@@ -1,0 +1,19 @@
+EMAIL ID: 950
+DATE:     2021-08-04
+SUBJECT:  Wednesday Morning Update - August 4 #2021-130
+FLAGGED SIGNALS: 1
+================================================================================
+
+  Signal #46692  [MANUAL]
+  Ticker:       YM
+  Date:         2021-08-04
+  Field:        cancel_level
+  Signal Value: 3850.0
+  Actual Close: 34690.0000
+  Ratio:        0.111x
+  Type:         BUY
+  Suggestion:   Ratio 0.11x -- large deviation
+  Raw Text:     US markets continue on a buy signal since not all 4 of them gave a sell signal. Dow Jones below 3,850 (no change)
+
+------------------------------------------------------------
+

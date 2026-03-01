@@ -217,6 +217,87 @@ def migrate_db(conn: sqlite3.Connection):
             created_at TEXT DEFAULT (datetime('now'))
         )""",
         "CREATE INDEX IF NOT EXISTS idx_stanley_briefs_email ON stanley_briefs(email_id)",
+        # v6: Fischer daily recommendations tracker
+        """CREATE TABLE IF NOT EXISTS fischer_recommendations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            report_date TEXT NOT NULL,
+            ticker TEXT NOT NULL,
+            strike REAL NOT NULL,
+            expiry TEXT NOT NULL,
+            option_type TEXT NOT NULL DEFAULT 'P',
+            bid REAL,
+            ask REAL,
+            iv REAL,
+            delta REAL,
+            p_otm REAL,
+            p_win REAL,
+            max_profit_per_share REAL,
+            net_ev_per_contract REAL,
+            nenner_score INTEGER,
+            spot_at_recommend REAL,
+            entry_price REAL,
+            premium_per_share REAL,
+            rank INTEGER,
+            settled INTEGER DEFAULT 0,
+            close_price_at_expiry REAL,
+            itm_at_expiry INTEGER,
+            pnl_per_share REAL,
+            pnl_total REAL,
+            settlement_date TEXT,
+            settlement_notes TEXT,
+            created_at TEXT DEFAULT (datetime('now'))
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_fischer_recs_date ON fischer_recommendations(report_date)",
+        "CREATE INDEX IF NOT EXISTS idx_fischer_recs_expiry ON fischer_recommendations(expiry, settled)",
+        # v7: Fischer multi-scan — add scan_slot column for 3 daily scans
+        "ALTER TABLE fischer_recommendations ADD COLUMN scan_slot TEXT NOT NULL DEFAULT 'opening'",
+        "CREATE INDEX IF NOT EXISTS idx_fischer_recs_date_slot ON fischer_recommendations(report_date, scan_slot)",
+        # v8: Fischer covered calls — add intent column
+        "ALTER TABLE fischer_recommendations ADD COLUMN intent TEXT NOT NULL DEFAULT 'covered_put'",
+        # v9: Fischer subscription — portfolio definitions
+        """CREATE TABLE IF NOT EXISTS fischer_portfolios (
+            portfolio_name TEXT PRIMARY KEY,
+            label TEXT NOT NULL,
+            tickers TEXT NOT NULL,
+            share_alloc TEXT NOT NULL DEFAULT '{}',
+            show_conviction INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT DEFAULT (datetime('now'))
+        )""",
+        # v10: Fischer subscription — subscriber registry
+        """CREATE TABLE IF NOT EXISTS fischer_subscribers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            email TEXT NOT NULL UNIQUE,
+            first_name TEXT NOT NULL DEFAULT '',
+            last_name TEXT NOT NULL DEFAULT '',
+            portfolio_name TEXT NOT NULL DEFAULT 'fischer_daily',
+            active INTEGER NOT NULL DEFAULT 1,
+            max_daily_refreshes INTEGER NOT NULL DEFAULT 25,
+            created_at TEXT DEFAULT (datetime('now')),
+            FOREIGN KEY (portfolio_name) REFERENCES fischer_portfolios(portfolio_name)
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_fischer_sub_email ON fischer_subscribers(email)",
+        "CREATE INDEX IF NOT EXISTS idx_fischer_sub_active ON fischer_subscribers(active)",
+        # v11: Fischer subscription — refresh request audit log
+        """CREATE TABLE IF NOT EXISTS fischer_refresh_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            subscriber_id INTEGER NOT NULL,
+            requested_at TEXT NOT NULL DEFAULT (datetime('now')),
+            email_subject TEXT,
+            portfolio_name TEXT,
+            status TEXT NOT NULL DEFAULT 'pending',
+            error_message TEXT,
+            FOREIGN KEY (subscriber_id) REFERENCES fischer_subscribers(id)
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_refresh_log_sub_date ON fischer_refresh_log(subscriber_id, requested_at)",
+        # v12: Fischer v2 — premium ratio and theta for ranking
+        "ALTER TABLE fischer_recommendations ADD COLUMN premium_ratio REAL",
+        "ALTER TABLE fischer_recommendations ADD COLUMN theta_per_share REAL",
+        # v13: Fischer v2 — update default portfolio to 17-ticker universe
+        """UPDATE fischer_portfolios
+           SET tickers = 'AAPL,AMZN,AVGO,GOOGL,IWM,META,MSFT,NVDA,QQQ,TSLA,GLD,IBIT,SLV,SPY,TLT,UNG,USO',
+               share_alloc = '{"AAPL":1800,"AMZN":2100,"AVGO":2200,"GOOGL":1600,"IWM":2200,"META":700,"MSFT":1200,"NVDA":2800,"QQQ":900,"TSLA":1200,"GLD":1800,"IBIT":9000,"SLV":16000,"SPY":800,"TLT":5500,"UNG":20000,"USO":6000}',
+               show_conviction = 1
+           WHERE portfolio_name = 'fischer_daily'""",
     ]
     for sql in migrations:
         try:
@@ -240,6 +321,8 @@ def migrate_db(conn: sqlite3.Connection):
     conn.commit()
     # Seed Stanley knowledge base on first run
     _seed_stanley_knowledge(conn)
+    # Seed default Fischer portfolio on first run
+    _seed_fischer_portfolios(conn)
     log.info("Database migrations applied")
 
 
@@ -276,6 +359,28 @@ def _seed_stanley_knowledge(conn: sqlite3.Connection):
         )
     conn.commit()
     log.info(f"Stanley knowledge base seeded with {len(seeds)} rules")
+
+
+def _seed_fischer_portfolios(conn: sqlite3.Connection):
+    """Seed the default Fischer Daily portfolio if the table is empty."""
+    try:
+        count = conn.execute("SELECT COUNT(*) FROM fischer_portfolios").fetchone()[0]
+    except sqlite3.OperationalError:
+        return  # Table doesn't exist yet
+    if count > 0:
+        return
+
+    conn.execute(
+        "INSERT INTO fischer_portfolios (portfolio_name, label, tickers, share_alloc, show_conviction) "
+        "VALUES (?, ?, ?, ?, ?)",
+        ("fischer_daily", "Fischer Daily",
+         "AAPL,AMZN,AVGO,GOOGL,IWM,META,MSFT,NVDA,QQQ,TSLA,GLD,IBIT,SLV,SPY,TLT,UNG,USO",
+         '{"AAPL":1800,"AMZN":2100,"AVGO":2200,"GOOGL":1600,"IWM":2200,"META":700,'
+         '"MSFT":1200,"NVDA":2800,"QQQ":900,"TSLA":1200,"GLD":1800,"IBIT":9000,'
+         '"SLV":16000,"SPY":800,"TLT":5500,"UNG":20000,"USO":6000}', 1)
+    )
+    conn.commit()
+    log.info("Fischer portfolios seeded with default 'fischer_daily'")
 
 
 # ---------------------------------------------------------------------------

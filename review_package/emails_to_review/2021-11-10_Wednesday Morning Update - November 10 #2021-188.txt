@@ -1,0 +1,32 @@
+EMAIL ID: 1039
+DATE:     2021-11-10
+SUBJECT:  Wednesday Morning Update - November 10 #2021-188
+FLAGGED SIGNALS: 2
+================================================================================
+
+  Signal #48172  [MANUAL]
+  Ticker:       ZC
+  Date:         2021-11-10
+  Field:        origin_price
+  Signal Value: 5.6
+  Actual Close: 569.2500
+  Ratio:        0.010x
+  Type:         SELL
+  Suggestion:   Ratio 0.01x -- severe, needs manual review
+  Raw Text:     Sell signal from 5.60 continues as long as there is no close above 5.65.
+
+------------------------------------------------------------
+
+  Signal #48172  [MANUAL]
+  Ticker:       ZC
+  Date:         2021-11-10
+  Field:        cancel_level
+  Signal Value: 5.65
+  Actual Close: 569.2500
+  Ratio:        0.010x
+  Type:         SELL
+  Suggestion:   Ratio 0.01x -- severe, needs manual review
+  Raw Text:     Sell signal from 5.60 continues as long as there is no close above 5.65.
+
+------------------------------------------------------------
+

@@ -1,0 +1,19 @@
+EMAIL ID: 1116
+DATE:     2022-01-28
+SUBJECT:  Friday Morning Update - January 28  #2022-018
+FLAGGED SIGNALS: 1
+================================================================================
+
+  Signal #49461  [CHECK]
+  Ticker:       GDXJ
+  Date:         2022-01-28
+  Field:        origin_price
+  Signal Value: 140.0
+  Actual Close: 34.9420
+  Ratio:        4.007x
+  Type:         SELL
+  Suggestion:   Ratio 4.01x -- moderate deviation
+  Raw Text:     GDXJ is on a sell signal from 140.
+
+------------------------------------------------------------
+

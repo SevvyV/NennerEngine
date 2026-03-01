@@ -1,0 +1,19 @@
+EMAIL ID: 1458
+DATE:     2023-01-27
+SUBJECT:  Friday Morning Update - January 27 #2023-016
+FLAGGED SIGNALS: 1
+================================================================================
+
+  Signal #55760  [MANUAL]
+  Ticker:       USD/JPY
+  Date:         2023-01-27
+  Field:        origin_price
+  Signal Value: 1.29
+  Actual Close: 129.8000
+  Ratio:        0.010x
+  Type:         BUY
+  Suggestion:   Ratio 0.01x -- severe, needs manual review
+  Raw Text:     Continues on a buy signal from 1.29 as long as there is no close below 128.
+
+------------------------------------------------------------
+

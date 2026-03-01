@@ -1,0 +1,19 @@
+EMAIL ID: 560
+DATE:     2020-07-17
+SUBJECT:  Friday Morning Update - July 17 #2020-102
+FLAGGED SIGNALS: 1
+================================================================================
+
+  Signal #43136  [MANUAL]
+  Ticker:       GC
+  Date:         2020-07-17
+  Field:        cancel_level
+  Signal Value: 18.16
+  Actual Close: 1808.3000
+  Ratio:        0.010x
+  Type:         BUY
+  Suggestion:   Value 18.16 looks like Silver, not Gold (~1808)
+  Raw Text:     The buy signal continues as long as there is not a close below 18.16.
+
+------------------------------------------------------------
+
