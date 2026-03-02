@@ -692,7 +692,7 @@ def compute_ev(
         max_profit_ps = (K - entry) + bid
         directional_dist = K - S
 
-    premium_ratio = bid / directional_dist if directional_dist > 0 else None
+    premium_ratio = bid / abs(directional_dist) if abs(directional_dist) > 0.001 else None
 
     # P(Profit) — probability the combined position is profitable at expiry
     # Covered put breakeven:  S_T < Entry + Premium  → profit

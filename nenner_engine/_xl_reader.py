@@ -19,7 +19,16 @@ import time
 
 
 def _pick_increment(ticker: str, spot: float) -> float:
-    """Choose strike increment based on spot price."""
+    """Choose strike increment from strike_increments.json, falling back to spot-based guess."""
+    import pathlib
+    _inc_file = pathlib.Path(__file__).with_name("strike_increments.json")
+    try:
+        _increments = json.loads(_inc_file.read_text())
+        if ticker in _increments:
+            return float(_increments[ticker])
+    except (FileNotFoundError, json.JSONDecodeError):
+        pass
+    # Fallback for tickers not in the json
     if spot < 50:
         return 0.5
     if spot < 200:

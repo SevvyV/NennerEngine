@@ -41,18 +41,7 @@ ROWS_PER_BLOCK = 42          # rows reserved per block in Options_RT
 PUT_SECTION_START = 12       # row 12 = first expiry header in Options_RT
 STRIKES_PER_BLOCK = 40       # data rows per block
 
-# Share allocations (same as fischer_daily_report.py)
-SHARE_ALLOC: dict[str, int] = {
-    "AAPL": 1_800,
-    "BAC":  10_000,
-    "GOOG": 1_600,
-    "MSFT": 1_200,
-    "NVDA": 2_800,
-    "TSLA": 1_200,
-    "QQQ":  800,
-    "SPY":  700,
-}
-DEFAULT_SHARES = 2_000
+TARGET_CAPITAL = 500_000
 
 # Formatting
 CLR_HEADER_BG = "#1e293b"
@@ -472,11 +461,7 @@ def _build_sheet(ws, src: str):
 
     c("C3").value = "Shares:"
     d3 = c("D3")
-    d3.formula = (
-        f'=IFERROR(VLOOKUP({src}!B1,'
-        '{"AAPL",1800;"BAC",10000;"GOOG",1600;"MSFT",1200;'
-        '"NVDA",2800;"TSLA",1200;"QQQ",800;"SPY",700},2,FALSE),2000)'
-    )
+    d3.formula = f'=MAX(100,ROUND({TARGET_CAPITAL}/$D$2,-2))'
     d3.number_format = "#,##0"
     d3.font.bold = True
 

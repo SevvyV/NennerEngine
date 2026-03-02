@@ -54,7 +54,7 @@ SCAN_TICKERS: list[str] = list(ALWAYS_TICKERS) + list(MACRO_POOL)
 CAPITAL = 500_000
 TOP_N = 99  # show all tickers per group (no limit)
 MIN_P_WIN = 0.55   # minimum P(Win) to qualify
-MAX_P_WIN = 0.70   # maximum P(Win) — exclude deep ITM / penny premium
+MAX_P_WIN = 0.65   # maximum P(Win) — exclude deep ITM / penny premium
 MAX_P_OTM = 0.55   # maximum P(OTM) — reject if too likely to expire worthless
 
 # Premium:Directional ratio band for macro ranking
@@ -88,30 +88,11 @@ REPORT_SECTIONS: tuple[ReportSection, ...] = (
                   "Entry assumes long stock at current spot", "call"),
 )
 
-# Share allocations per ticker — ~$500K notional, rounded to nearest 100
-# (contracts = shares / 100, creating a true covered put/call)
-# Exception: UNG reduced (contango vehicle)
-SHARE_ALLOC: dict[str, int] = {
-    # --- Always Shown (10) ---
-    "AAPL":  1_800,   # ~$265 × 1800  = $477K
-    "AMZN":  2_100,   # ~$230 × 2100  = $483K
-    "AVGO":  2_200,   # ~$220 × 2200  = $484K
-    "GOOGL": 1_600,   # ~$307 × 1600  = $491K
-    "IWM":   2_200,   # ~$225 × 2200  = $495K
-    "META":    700,   # ~$685 × 700   = $480K
-    "MSFT":  1_200,   # ~$393 × 1200  = $472K
-    "NVDA":  2_800,   # ~$179 × 2800  = $501K
-    "QQQ":     900,   # ~$520 × 900   = $468K
-    "TSLA":  1_200,   # ~$399 × 1200  = $479K
-    # --- Macro Pool (7) ---
-    "GLD":   1_800,   # ~$268 × 1800  = $482K
-    "IBIT":  9_000,   # ~$55  × 9000  = $495K
-    "SLV":  16_000,   # ~$30  × 16000 = $480K
-    "SPY":     800,   # ~$590 × 800   = $472K
-    "TLT":   5_500,   # ~$90  × 5500  = $495K
-    "UNG":  20_000,   # ~$12  × 20000 = $240K  (reduced — contango)
-    "USO":   6_000,   # ~$82  × 6000  = $492K
-}
+def _calc_shares(spot: float, capital: int = CAPITAL) -> int:
+    """Calculate share count closest to target capital, rounded to 100 shares."""
+    if spot <= 0:
+        return 100
+    return max(100, int(round(capital / spot, -2)))
 
 
 def _select_macro_tickers(
@@ -586,12 +567,13 @@ def _wrap_fischer_document(**kwargs) -> str:
     return html
 
 
-def _table_header(show_conviction: bool = True) -> str:
+def _table_header(show_conviction: bool = True, intent: str = "covered_put") -> str:
     """Build HTML table header, optionally including the Conviction column."""
     conviction_th = (
         '<th style="padding:10px 12px; text-align:left;">Conviction</th>'
         if show_conviction else ""
     )
+    max_profit_label = "Max Profit<br>if Put" if intent == "covered_put" else "Max Profit<br>if Called"
     return f"""
       <thead>
         <tr style="background:{_CLR_ROW_ALT}; border-bottom:2px solid {_CLR_BORDER};">
@@ -601,12 +583,12 @@ def _table_header(show_conviction: bool = True) -> str:
           <th style="padding:10px 12px; text-align:left;">Expiry</th>
           <th style="padding:10px 12px; text-align:left;">Shares</th>
           <th style="padding:10px 12px; text-align:left;">Bid</th>
-          <th style="padding:10px 12px; text-align:left;">OPT($)</th>
           <th style="padding:10px 12px; text-align:left;">IV</th>
           <th style="padding:10px 12px; text-align:left;">P(OTM)</th>
           <th style="padding:10px 12px; text-align:left;">P(Win)</th>
           <th style="padding:10px 12px; text-align:left;">Theta($)</th>
           <th style="padding:10px 12px; text-align:left;">Dir($)</th>
+          <th style="padding:10px 12px; text-align:left;">{max_profit_label}</th>
           {conviction_th}
         </tr>
       </thead>"""
@@ -625,8 +607,7 @@ def _build_rec_row(r: dict, show_conviction: bool = True) -> str:
     potm_pct = r["p_otm"] * 100
     iv_pct = r["iv"] * 100
     ticker = r["ticker"]
-    shares = r.get("shares") or SHARE_ALLOC.get(ticker, 2_000)
-    opt_income = r["bid"] * shares  # total option premium collected
+    shares = r.get("shares") or _calc_shares(r["spot_at_recommend"])
     flag = r.get("flag", "clean")
     expiry_fmt = _format_expiry(r["expiry"])
 
@@ -644,6 +625,7 @@ def _build_rec_row(r: dict, show_conviction: bool = True) -> str:
     theta_per_share = bid - intrinsic  # extrinsic value
     theta_total = theta_per_share * shares
     dir_total = dir_per_share * shares
+    max_profit_total = r.get("max_profit_per_share", 0) * shares
 
     if flag == "deferred":
         row_style = f'border-bottom:1px solid {_CLR_BORDER}; background:{CLR_YELLOW};'
@@ -668,7 +650,6 @@ def _build_rec_row(r: dict, show_conviction: bool = True) -> str:
             <td style="padding:10px 12px;">{expiry_fmt}</td>
             <td style="padding:10px 12px;">{shares:,}</td>
             <td style="padding:10px 12px;">${bid:.2f}</td>
-            <td style="padding:10px 12px; font-weight:600;">${opt_income:,.0f}</td>
             <td style="padding:10px 12px;">{iv_pct:.1f}%</td>
             <td style="padding:10px 12px;">{potm_pct:.1f}%</td>
             <td style="{pwin_style}">{pwin_pct:.1f}%</td>
@@ -676,6 +657,8 @@ def _build_rec_row(r: dict, show_conviction: bool = True) -> str:
                 ${theta_total:,.0f}</td>
             <td style="padding:10px 12px; font-weight:700; color:{_CLR_GREEN};">
                 ${dir_total:,.0f}</td>
+            <td style="padding:10px 12px; font-weight:700; color:{_CLR_GREEN};">
+                ${max_profit_total:,.0f}</td>
             {conviction_td}
         </tr>"""
 
@@ -694,11 +677,12 @@ def _build_section(
     section_title: str,
     entry_note: str,
     strike_label: str,
-    header: str,
+    intent: str,
     show_conviction: bool = True,
     display_order: tuple[str, ...] | None = None,
 ) -> str:
     """Build HTML for one intent section (short-term + weekly tables)."""
+    header = _table_header(show_conviction, intent=intent)
     sorted_recs = _sort_recs(recs, display_order)
     rows_html = "".join(_build_rec_row(r, show_conviction) for r in sorted_recs)
 
@@ -757,8 +741,6 @@ def _build_recommendation_email(
     """Build combined HTML email with covered put and covered call sections."""
     today = date.today().strftime("%B %d, %Y")
 
-    header = _table_header(show_conviction)
-
     sections = ""
 
     # --- Covered Puts ---
@@ -769,7 +751,7 @@ def _build_recommendation_email(
             section_title="Covered Put Recommendations",
             entry_note="Entry assumes short sale at current spot",
             strike_label="put",
-            header=header,
+            intent="covered_put",
             show_conviction=show_conviction,
             display_order=display_order,
         )
@@ -786,7 +768,7 @@ def _build_recommendation_email(
             section_title="Covered Call Ideas",
             entry_note="Entry assumes long stock at current spot",
             strike_label="call",
-            header=header,
+            intent="covered_call",
             show_conviction=show_conviction,
             display_order=display_order,
         )
@@ -816,13 +798,13 @@ def _build_recommendation_email(
       <strong>Spot</strong> = price at scan &nbsp;|&nbsp;
       <strong>Strike</strong> = option strike &nbsp;|&nbsp;
       <strong>Shares</strong> = position size &nbsp;|&nbsp;
-      <strong>Bid</strong> = option bid per share &nbsp;|&nbsp;
-      <strong>OPT($)</strong> = total option income (bid &times; shares)<br>
+      <strong>Bid</strong> = option bid per share<br>
       <strong>IV</strong> = implied volatility &nbsp;|&nbsp;
       <strong>P(OTM)</strong> = probability expires worthless (&le;55%) &nbsp;|&nbsp;
       <strong>P(Win)</strong> = probability of profit at expiry<br>
       <strong>Theta($)</strong> = extrinsic (time-decay) income &nbsp;|&nbsp;
-      <strong>Dir($)</strong> = directional profit if assigned<br>
+      <strong>Dir($)</strong> = directional profit if assigned &nbsp;|&nbsp;
+      <strong>Max Profit</strong> = theta + directional combined (shares &times; max profit/sh)<br>
       {conviction_legend}
       <span style="background:{CLR_YELLOW}; padding:1px 5px;">Yellow row</span> = no 0DTE strike in band, deferred to later expiry &nbsp;|&nbsp;
       <span style="background:{CLR_YELLOW}; padding:1px 5px;">Yellow P(Win)</span> = no strike in band, showing closest match
@@ -854,7 +836,6 @@ def _build_unified_email(
     slot_label : e.g. "Opening Scan", "Midday Scan"
     """
     today = date.today().strftime("%B %d, %Y")
-    header = _table_header(show_conviction=False)
 
     sections_html = ""
     for section in REPORT_SECTIONS:
@@ -868,6 +849,7 @@ def _build_unified_email(
                 f' margin:24px 0 8px 0;">'
             )
 
+        header = _table_header(show_conviction=False, intent=section.intent)
         sorted_recs = _sort_recs(recs)
         rows_html = "".join(_build_rec_row(r, show_conviction=False) for r in sorted_recs)
 
@@ -901,13 +883,13 @@ def _build_unified_email(
       <strong>Spot</strong> = price at scan &nbsp;|&nbsp;
       <strong>Strike</strong> = option strike &nbsp;|&nbsp;
       <strong>Shares</strong> = position size &nbsp;|&nbsp;
-      <strong>Bid</strong> = option bid per share &nbsp;|&nbsp;
-      <strong>OPT($)</strong> = total option income (bid &times; shares)<br>
+      <strong>Bid</strong> = option bid per share<br>
       <strong>IV</strong> = implied volatility &nbsp;|&nbsp;
       <strong>P(OTM)</strong> = probability expires worthless (&le;55%) &nbsp;|&nbsp;
       <strong>P(Win)</strong> = probability of profit at expiry<br>
       <strong>Theta($)</strong> = extrinsic (time-decay) income &nbsp;|&nbsp;
-      <strong>Dir($)</strong> = directional profit if assigned<br>
+      <strong>Dir($)</strong> = directional profit if assigned &nbsp;|&nbsp;
+      <strong>Max Profit</strong> = theta + directional combined (shares &times; max profit/sh)<br>
       <span style="background:{CLR_YELLOW}; padding:1px 5px;">Yellow row</span> = no 0DTE strike in band, deferred to later expiry &nbsp;|&nbsp;
       <span style="background:{CLR_YELLOW}; padding:1px 5px;">Yellow P(Win)</span> = no strike in band, showing closest match
     </div>"""
@@ -1484,7 +1466,9 @@ def _generate_weekly_recs(
 
             in_band = [r for r in ranked
                        if MIN_P_WIN <= r.p_profit <= MAX_P_WIN
-                       and r.p_expire_worthless <= MAX_P_OTM]
+                       and r.p_expire_worthless <= MAX_P_OTM
+                       and r.premium_ratio is not None
+                       and MIN_RATIO <= r.premium_ratio <= MAX_RATIO]
 
             if in_band:
                 best = max(in_band, key=lambda r: r.max_profit_per_share)
@@ -1574,7 +1558,9 @@ def _select_best_candidate(ranked: list, ticker: str) -> tuple | None:
 
     in_band = [r for r in ranked
                if MIN_P_WIN <= r.p_profit <= MAX_P_WIN
-               and r.p_expire_worthless <= MAX_P_OTM]
+               and r.p_expire_worthless <= MAX_P_OTM
+               and r.premium_ratio is not None
+               and MIN_RATIO <= r.premium_ratio <= MAX_RATIO]
 
     if in_band:
         today_date = date.today()
@@ -1606,14 +1592,14 @@ def generate_fresh_scan(
     Parameters
     ----------
     tickers : tuple of equity/ETF tickers to scan
-    share_alloc : optional custom {ticker: shares} mapping (falls back to global SHARE_ALLOC)
+    share_alloc : optional custom {ticker: shares} mapping (falls back to _calc_shares)
     show_conviction : whether the report should include Nenner conviction column
 
     Returns
     -------
     (put_recs, call_recs, put_weekly, call_weekly, failed_tickers)
     """
-    alloc = share_alloc or SHARE_ALLOC
+    alloc = share_alloc or {}
 
     def _scan_intent(intent: str, dte_range=None) -> tuple[list[dict], list[str]]:
         candidates = []
@@ -1661,7 +1647,7 @@ def generate_fresh_scan(
                 "theta_per_share": ev.theta,
                 "rank": rank,
                 "flag": flag,
-                "shares": alloc.get(ticker, SHARE_ALLOC.get(ticker, 2000)),
+                "shares": alloc.get(ticker) or _calc_shares(ev.spot),
             })
         return recs, failed
 

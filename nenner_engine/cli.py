@@ -308,11 +308,10 @@ Examples:
             print()
     elif args.fischer_add_portfolio:
         from .fischer_subscribers import add_portfolio
-        from .fischer_daily_report import SHARE_ALLOC
         name, label, tickers_csv = args.fischer_add_portfolio
         tickers = [t.strip() for t in tickers_csv.split(",")]
-        alloc = {t: SHARE_ALLOC.get(t, 2000) for t in tickers}
-        add_portfolio(conn, name, label, tickers, alloc)
+        add_portfolio(conn, name, label, tickers, {})
+        # Share alloc is now computed dynamically from spot price at scan time
         print(f"Added portfolio '{name}' ({label}): {tickers}")
     elif args.fischer_list_portfolios:
         from .fischer_subscribers import list_portfolios
