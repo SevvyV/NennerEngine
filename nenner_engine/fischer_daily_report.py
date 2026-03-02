@@ -1018,23 +1018,14 @@ def _scan_all_tickers(
         dte_label = f"{dte_range[0]}-{dte_range[1]}"
         scan_slot = slot if dte_range[1] <= 7 else f"{slot}_weekly"
 
-        # Check DB dedup for this slot/intent combo
+        # Clear any prior results for this slot/intent so we always scan fresh
         today_str = date.today().isoformat()
-        tickers_tuple = tuple(SCAN_TICKERS)
-        placeholders = ",".join("?" * len(tickers_tuple))
-        existing = conn.execute(
-            f"SELECT COUNT(*) FROM fischer_recommendations "
-            f"WHERE report_date = ? AND scan_slot = ? AND intent = ? "
-            f"AND ticker IN ({placeholders})",
-            (today_str, scan_slot, intent, *tickers_tuple)
-        ).fetchone()[0]
-
-        if existing > 0:
-            log.info(f"Fischer {slot}/{intent}/{dte_label}: already generated, loading from DB")
-            loaded = _load_slot_recs(conn, today_str, scan_slot, intent)
-            for rec in loaded:
-                results[(rec["ticker"], intent, dte_label)] = rec
-            continue
+        conn.execute(
+            "DELETE FROM fischer_recommendations "
+            "WHERE report_date = ? AND scan_slot = ? AND intent = ?",
+            (today_str, scan_slot, intent)
+        )
+        conn.commit()
 
         recs_to_store = []
         for ticker in SCAN_TICKERS:
@@ -1336,18 +1327,13 @@ def _generate_with_ticker_tracking(
     scan_list = tickers or tuple(SCAN_TICKERS)
     today_str = date.today().isoformat()
 
-    # Dedup: check if these specific tickers already have recs for (date, slot, intent)
-    placeholders = ",".join("?" * len(scan_list))
-    existing = conn.execute(
-        f"SELECT COUNT(*) FROM fischer_recommendations "
-        f"WHERE report_date = ? AND scan_slot = ? AND intent = ? "
-        f"AND ticker IN ({placeholders})",
-        (today_str, slot, intent, *scan_list)
-    ).fetchone()[0]
-    if existing > 0:
-        log.info(f"Fischer {slot}/{intent}: already generated for {today_str} "
-                 f"({existing} recs for {len(scan_list)} tickers)")
-        return _load_slot_recs(conn, today_str, slot, intent, tickers), []
+    # Clear any prior results for this slot/intent so we always scan fresh
+    conn.execute(
+        "DELETE FROM fischer_recommendations "
+        "WHERE report_date = ? AND scan_slot = ? AND intent = ?",
+        (today_str, slot, intent)
+    )
+    conn.commit()
 
     all_candidates = []  # list of (ticker, EVResult, flag)
     failed_tickers = []  # tickers where pricing was unavailable
