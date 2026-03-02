@@ -39,6 +39,28 @@ def _output(data: dict, out_path: str | None) -> None:
         print(text)
 
 
+def _find_workbook(workbook_name: str):
+    """Find a workbook by name, skipping Excel instances with broken COM handles.
+
+    Phantom Excel processes (no open workbooks, stale RTD add-in remnants)
+    can cause AccessibleObjectFromWindow to throw OSError -2147467259.
+    This iterates through all instances defensively so one bad instance
+    doesn't take down the entire chain read.
+    """
+    import xlwings as xw
+
+    for app in xw.apps:
+        try:
+            for book in app.books:
+                if book.name.lower() == workbook_name.lower():
+                    return book
+        except OSError:
+            # Phantom Excel instance — broken COM handle, skip it
+            continue
+
+    return None
+
+
 def main():
     ticker = sys.argv[1].upper() if len(sys.argv) > 1 else ""
     workbook_name = sys.argv[2] if len(sys.argv) > 2 else "Nenner_DataCenter.xlsm"
@@ -53,9 +75,10 @@ def main():
         import pythoncom
         pythoncom.CoInitialize()
 
-        import xlwings as xw
-
-        wb = xw.Book(workbook_name)
+        wb = _find_workbook(workbook_name)
+        if wb is None:
+            _output({"ok": False, "error": f"Workbook '{workbook_name}' not found in any Excel instance"}, out_path)
+            return
         ws = wb.sheets[sheet_name]
 
         # Check if we need to switch tickers
