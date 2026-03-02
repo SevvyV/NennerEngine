@@ -99,9 +99,9 @@ def main():
 
         if needs_switch:
             ws.range("B1").value = ticker
-            time.sleep(2)
+            time.sleep(0.3)
             _safe_calc(wb)
-            time.sleep(1)
+            time.sleep(0.2)
 
             prelim_spot = ws.range("B3").value
             if prelim_spot and float(prelim_spot) > 0:
@@ -111,9 +111,9 @@ def main():
             ws.range("B2").value = new_inc
 
             _safe_calc(wb)
-            time.sleep(3)
+            time.sleep(0.3)
             _safe_calc(wb)
-            time.sleep(1)
+            time.sleep(0.2)
 
         # Read header
         spot = ws.range("B3").value
