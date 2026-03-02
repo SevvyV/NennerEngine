@@ -37,8 +37,7 @@ log = logging.getLogger("nenner")
 # Canonical Color Palette — change here, changes everywhere
 # ---------------------------------------------------------------------------
 
-FONT = ("-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, "
-        "'Helvetica Neue', Arial, sans-serif")
+FONT = "Verdana, Geneva, Tahoma, sans-serif"
 
 # Core layout
 CLR_BG       = "#ffffff"    # Body background — white per user directive
@@ -102,12 +101,12 @@ def wrap_document(
     if title:
         sub_html = ""
         if subtitle:
-            sub_html = (f'<p style="margin:6px 0 0; font-size:14px; '
+            sub_html = (f'<p style="margin:6px 0 0; font-size:15px; '
                         f'color:#94a3b8; font-family:{FONT};">{subtitle}</p>')
         header_html = f'''
     <div style="background-color:{CLR_HEADER}; color:#fff; padding:24px 28px;
                 border-radius:8px 8px 0 0;">
-      <h1 style="margin:0; font-size:22px; font-weight:700;
+      <h1 style="margin:0; font-size:24px; font-weight:700;
                  color:{CLR_WHITE}; font-family:{FONT};">{title}</h1>
       {sub_html}
     </div>'''
@@ -225,7 +224,7 @@ def markdown_to_html(md_text: str) -> str:
         if stripped.startswith("|") and stripped.endswith("|"):
             if not in_table:
                 html_lines.append('<table style="width:100%; border-collapse:collapse; '
-                                  f'margin:12px 0; font-size:13px; color:{CLR_TEXT};">')
+                                  f'margin:12px 0; font-size:14px; color:{CLR_TEXT};">')
                 in_table = True
                 is_header_row = True
 
@@ -258,29 +257,29 @@ def markdown_to_html(md_text: str) -> str:
             # Headers
             elif stripped.startswith("### "):
                 html_lines.append(
-                    f'<h3 style="color:{CLR_TEXT}; font-size:15px; '
+                    f'<h3 style="color:{CLR_TEXT}; font-size:16px; '
                     f'margin:10px 0 4px 0;">{stripped[4:]}</h3>')
             elif stripped.startswith("## "):
                 html_lines.append(
-                    f'<h2 style="color:{CLR_HEADER}; font-size:18px; '
+                    f'<h2 style="color:{CLR_HEADER}; font-size:20px; '
                     f'margin:12px 0 4px 0;">{stripped[3:]}</h2>')
             elif stripped.startswith("# "):
                 html_lines.append(
-                    f'<h1 style="color:{CLR_HEADER}; font-size:22px; '
+                    f'<h1 style="color:{CLR_HEADER}; font-size:24px; '
                     f'margin:12px 0 6px 0; border-bottom:1px solid {CLR_BORDER}; '
                     f'padding-bottom:6px;">{stripped[2:]}</h1>')
             elif stripped.startswith("- "):
                 content = stripped[2:]
                 content = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", content)
                 html_lines.append(
-                    f'<li style="color:{CLR_TEXT}; font-size:14px; '
+                    f'<li style="color:{CLR_TEXT}; font-size:15px; '
                     f'line-height:1.5; margin:1px 0;">{content}</li>')
             elif stripped == "":
                 continue  # skip blank lines instead of adding <br>
             else:
                 content = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", stripped)
                 html_lines.append(
-                    f'<p style="color:{CLR_TEXT}; font-size:14px; '
+                    f'<p style="color:{CLR_TEXT}; font-size:15px; '
                     f'line-height:1.6; margin:4px 0;">{content}</p>')
 
     if in_table:
