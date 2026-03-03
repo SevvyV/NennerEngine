@@ -107,6 +107,36 @@ def get_subscriber_by_last_name(conn: sqlite3.Connection,
     return None
 
 
+def _match_subscriber_by_subject(conn: sqlite3.Connection,
+                                  subject: str) -> Optional[dict]:
+    """Match a subscriber by finding their last name in the email subject.
+
+    Subject must contain both "Refresh" and a subscriber's last name.
+    E.g. "Refresh Maher" matches Chris Maher.
+    Returns None if no match or ambiguous.
+    """
+    subject_lower = subject.lower()
+    if "refresh" not in subject_lower:
+        return None
+
+    # Get all active subscribers and check if their last name is in the subject
+    rows = conn.execute(
+        "SELECT * FROM fischer_subscribers WHERE active = 1"
+    ).fetchall()
+
+    matches = [dict(r) for r in rows if r["last_name"].lower() in subject_lower]
+
+    if len(matches) == 1:
+        log.info(f"Fischer refresh: matched subscriber {matches[0]['last_name']} "
+                 f"from subject '{subject}'")
+        return matches[0]
+    if len(matches) > 1:
+        names = [m["last_name"] for m in matches]
+        log.warning(f"Fischer refresh: ambiguous subject '{subject}' "
+                    f"matched {names}")
+    return None
+
+
 def get_all_active_subscribers(conn: sqlite3.Connection) -> list[dict]:
     """Return all active subscribers joined with their portfolio data."""
     rows = conn.execute(
@@ -334,10 +364,23 @@ def _process_refresh_email(imap, conn: sqlite3.Connection,
 
     log.info(f"Fischer refresh: processing from={sender_email} subject='{subject}'")
 
-    # 1. Look up subscriber by sender email
-    subscriber = get_subscriber_by_email(conn, sender_email)
+    # Telegram notification — fire for every Refresh email received
+    try:
+        from .alerts import notify_fischer_refresh
+        notify_fischer_refresh(sender_email)
+    except Exception as e:
+        log.debug(f"Fischer refresh Telegram notify failed: {e}")
+
+    # 1. Look up subscriber — match by last name in subject
+    #    Subject must contain "Refresh" AND the subscriber's last name.
+    #    This lets any sender (including the admin) trigger a refresh for a specific subscriber.
+    subscriber = _match_subscriber_by_subject(conn, subject)
     if not subscriber:
-        log.info(f"Fischer refresh: sender {sender_email} is not an active subscriber, skipping")
+        # Fallback: try matching by sender email (backward compat)
+        subscriber = get_subscriber_by_email(conn, sender_email)
+    if not subscriber:
+        log.info(f"Fischer refresh: no subscriber matched for "
+                 f"subject='{subject}' sender={sender_email}, skipping")
         return 0
 
     # 2. Use sender's own portfolio
@@ -407,10 +450,13 @@ def _process_refresh_email(imap, conn: sqlite3.Connection,
 
 def _generate_and_send_refresh(subscriber: dict, portfolio: dict,
                                original_subject: str):
-    """Generate a fresh Fischer scan and email it to the subscriber."""
+    """Generate a fresh Fischer scan and email it to the subscriber.
+
+    Uses the same _build_unified_email format as the admin Daily Scan.
+    """
     from datetime import date as _date
     from .fischer_daily_report import (
-        generate_fresh_scan, _build_recommendation_email,
+        generate_fresh_scan, _build_unified_email, REPORT_SECTIONS,
     )
     from .postmaster import send_email
 
@@ -430,7 +476,6 @@ def _generate_and_send_refresh(subscriber: dict, portfolio: dict,
 
     tickers = portfolio["tickers"]
     share_alloc = portfolio["share_alloc"]
-    show_conviction = portfolio["show_conviction"]
     label = portfolio["label"]
 
     log.info(f"Fischer refresh: generating live scan for {subscriber['email']} "
@@ -439,26 +484,27 @@ def _generate_and_send_refresh(subscriber: dict, portfolio: dict,
     put_recs, call_recs, put_weekly, call_weekly, failed = generate_fresh_scan(
         tickers=tickers,
         share_alloc=share_alloc,
-        show_conviction=show_conviction,
     )
 
-    today_str = _date.today().strftime("%B %d, %Y")
+    # Map fresh scan results into sections_data keyed by ReportSection
+    # REPORT_SECTIONS[0] = covered puts 0-7 DTE, [1] = covered puts 8-14 DTE
+    sections_data = {}
+    if put_recs and len(REPORT_SECTIONS) > 0:
+        sections_data[REPORT_SECTIONS[0]] = put_recs
+    if put_weekly and len(REPORT_SECTIONS) > 1:
+        sections_data[REPORT_SECTIONS[1]] = put_weekly
+
+    if not sections_data:
+        log.info(f"Fischer refresh: no results for {subscriber['email']}, skipping")
+        return
+
     now_str = datetime.now().strftime("%I:%M %p")
-    slot_label = f"Refresh — {now_str}"
+    slot_label = f"Refresh \u2014 {now_str}"
 
-    html = _build_recommendation_email(
-        put_recs=put_recs,
-        call_recs=call_recs,
-        put_weekly=put_weekly,
-        call_weekly=call_weekly,
-        failed_tickers=failed,
-        slot_label=slot_label,
-        group_label=label,
-        show_conviction=show_conviction,
-        display_order=tickers,
-    )
+    html = _build_unified_email(sections_data, failed, slot_label)
 
-    email_subject = f"Fischer {label} — {slot_label} — {today_str}"
+    today_fmt = _date.today().strftime('%b %d')
+    email_subject = f"Fischer Daily Scan \u2014 {slot_label} \u2014 {today_fmt}"
     send_email(email_subject, html, to_addr=subscriber["email"])
     log.info(f"Fischer refresh: sent to {subscriber['email']}")
 

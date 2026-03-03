@@ -37,13 +37,13 @@ REPORT_TO = "sevagv@vartaniancapital.com"
 
 # Always included in every section (10 tickers)
 ALWAYS_TICKERS: tuple[str, ...] = (
-    "AAPL", "AMZN", "AVGO", "GOOGL", "IWM",
+    "AAPL", "AMZN", "AVGO", "GOOGL",
     "META", "MSFT", "NVDA", "QQQ", "TSLA",
 )
 
-# Macro pool — top 5 selected per section by premium:directional ratio (7 tickers)
+# Macro pool — top 4 selected per section by premium:directional ratio
 MACRO_POOL: tuple[str, ...] = (
-    "GLD", "IBIT", "SLV", "SPY", "TLT", "UNG", "USO",
+    "GLD", "SLV", "TLT", "UNG", "USO",
 )
 
 MACRO_PICKS = 5
@@ -72,6 +72,88 @@ _CALL_RULES = {
 def _rules(intent: str) -> dict:
     """Return the filter rules dict for a given intent."""
     return _CALL_RULES if intent == "covered_call" else _PUT_RULES
+
+
+# ---------------------------------------------------------------------------
+# Debug scan log — captures every strike evaluated, not just the winner
+# ---------------------------------------------------------------------------
+_SCAN_DEBUG_DB = "E:/Workspace/NennerEngine/fischer_scan_debug.db"
+
+def _init_debug_db():
+    """Create the debug DB and table if needed. Returns connection."""
+    conn = sqlite3.connect(_SCAN_DEBUG_DB)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS scan_debug (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            scan_time TEXT,
+            ticker TEXT,
+            intent TEXT,
+            strike REAL,
+            expiry TEXT,
+            dte INTEGER,
+            spot REAL,
+            bid REAL,
+            ask REAL,
+            iv REAL,
+            p_win REAL,
+            p_otm REAL,
+            premium_ratio REAL,
+            max_profit_ps REAL,
+            ev_per_contract REAL,
+            verdict TEXT,
+            fail_reasons TEXT
+        )
+    """)
+    return conn
+
+def _log_debug_strikes(ticker: str, intent: str, ranked: list):
+    """Write every evaluated strike to the debug DB with pass/fail reasons."""
+    if not ranked:
+        return
+    try:
+        conn = _init_debug_db()
+        R = _rules(intent)
+        now = datetime.now().isoformat(timespec="seconds")
+        today_date = date.today()
+
+        rows = []
+        for r in ranked:
+            reasons = []
+            if r.p_profit < R["min_p_win"]:
+                reasons.append(f"p_win {r.p_profit:.3f} < {R['min_p_win']}")
+            if r.p_profit > R["max_p_win"]:
+                reasons.append(f"p_win {r.p_profit:.3f} > {R['max_p_win']}")
+            if r.p_expire_worthless > R["max_p_otm"]:
+                reasons.append(f"p_otm {r.p_expire_worthless:.3f} > {R['max_p_otm']}")
+            if r.premium_ratio is None:
+                reasons.append("ratio=None (ATM)")
+            elif r.premium_ratio < R["min_ratio"]:
+                reasons.append(f"ratio {r.premium_ratio:.2f} < {R['min_ratio']}")
+            elif r.premium_ratio > R["max_ratio"]:
+                reasons.append(f"ratio {r.premium_ratio:.2f} > {R['max_ratio']}")
+
+            verdict = "PASS" if not reasons else "FAIL"
+            dte = (r.expiry - today_date).days
+
+            rows.append((
+                now, ticker, intent, r.strike, str(r.expiry), dte,
+                r.spot, r.bid, r.ask, r.iv, r.p_profit,
+                r.p_expire_worthless, r.premium_ratio,
+                r.max_profit_per_share, r.net_ev_per_contract,
+                verdict, "; ".join(reasons) if reasons else "",
+            ))
+
+        conn.executemany("""
+            INSERT INTO scan_debug
+            (scan_time, ticker, intent, strike, expiry, dte, spot, bid, ask,
+             iv, p_win, p_otm, premium_ratio, max_profit_ps, ev_per_contract,
+             verdict, fail_reasons)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, rows)
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        log.debug(f"Debug scan log failed for {ticker}: {e}")
 
 # ---------------------------------------------------------------------------
 # Report Sections — 4 DTE × Intent combinations in a single email
@@ -742,100 +824,6 @@ def _build_section(
     {weekly_section}"""
 
 
-def _build_recommendation_email(
-    put_recs: list[dict],
-    call_recs: list[dict] | None = None,
-    put_weekly: list[dict] | None = None,
-    call_weekly: list[dict] | None = None,
-    failed_tickers: list[str] | None = None,
-    slot_label: str = "Daily",
-    group_label: str = "",
-    show_conviction: bool = True,
-    display_order: tuple[str, ...] | None = None,
-) -> str:
-    """Build combined HTML email with covered put and covered call sections."""
-    today = date.today().strftime("%B %d, %Y")
-
-    sections = ""
-
-    # --- Covered Puts ---
-    if put_recs:
-        sections += _build_section(
-            recs=put_recs,
-            weekly_recs=put_weekly,
-            section_title="Covered Put Recommendations",
-            entry_note="Entry assumes short sale at current spot",
-            strike_label="put",
-            intent="covered_put",
-            show_conviction=show_conviction,
-            display_order=display_order,
-        )
-
-    # --- Covered Calls ---
-    if call_recs:
-        if put_recs:
-            sections += f"""
-    <hr style="border:none; border-top:2px solid {_CLR_BORDER}; margin:24px 0 8px 0;">"""
-
-        sections += _build_section(
-            recs=call_recs,
-            weekly_recs=call_weekly,
-            section_title="Covered Call Ideas",
-            entry_note="Entry assumes long stock at current spot",
-            strike_label="call",
-            intent="covered_call",
-            show_conviction=show_conviction,
-            display_order=display_order,
-        )
-
-    # --- Failed tickers notice ---
-    failed_notice = ""
-    if failed_tickers:
-        failed_notice = f"""
-    <p style="color:{_CLR_RED}; font-size:13px; font-weight:600; margin:12px 0 4px 0;">
-      Unable to retrieve pricing for: {", ".join(failed_tickers)}
-    </p>"""
-
-    content = f"""
-    {sections}
-
-    {failed_notice}"""
-
-    conviction_legend = (
-        '<strong>Conviction</strong> = Signal conviction score (0&ndash;100)<br>'
-        if show_conviction else ""
-    )
-
-    legend = f"""
-    <div style="margin-top:16px; padding:14px 20px; font-size:13px;
-                color:{_CLR_TEXT}; line-height:1.6;">
-      <strong style="font-size:14px;">Legend</strong><br>
-      <strong>Spot</strong> = price at scan &nbsp;|&nbsp;
-      <strong>Strike</strong> = option strike &nbsp;|&nbsp;
-      <strong>Shares</strong> = position size &nbsp;|&nbsp;
-      <strong>Bid</strong> = option bid per share<br>
-      <strong>IV</strong> = implied volatility &nbsp;|&nbsp;
-      <strong>P(OTM)</strong> = probability expires worthless (&le;55%) &nbsp;|&nbsp;
-      <strong>P(Win)</strong> = probability of profit at expiry<br>
-      <strong>Theta($)</strong> = extrinsic (time-decay) income &nbsp;|&nbsp;
-      <strong>Dir($)</strong> = directional profit if assigned &nbsp;|&nbsp;
-      <strong>Max Profit</strong> = theta + directional combined (shares &times; max profit/sh)<br>
-      {conviction_legend}
-      <span style="background:{CLR_YELLOW}; padding:1px 5px;">Yellow row</span> = no 0DTE strike in band, deferred to later expiry &nbsp;|&nbsp;
-      <span style="background:{CLR_YELLOW}; padding:1px 5px;">Yellow P(Win)</span> = no strike in band, showing closest match
-    </div>"""
-
-    title_prefix = f"Fischer {group_label}" if group_label else f"Fischer {slot_label}"
-
-    return _wrap_fischer_document(
-        body_html=content,
-        title=title_prefix,
-        subtitle=f"{slot_label} &mdash; {today}",
-        footer_text="Generated by Fischer Options Engine",
-        notes_html=legend,
-        max_width=960,
-    )
-
 
 def _build_unified_email(
     sections_data: dict,
@@ -1074,6 +1062,12 @@ def _scan_all_tickers(
                 result = _select_best_candidate(ranked, ticker, intent=intent)
                 if result:
                     ev, flag = result
+                    # Min profit threshold: 1% of stock value
+                    if ev.spot and ev.max_profit_per_share / ev.spot < 0.01:
+                        log.info(f"  {ticker}: max profit {ev.max_profit_per_share:.2f}/"
+                                 f"{ev.spot:.2f} = {ev.max_profit_per_share/ev.spot:.2%}"
+                                 f" < 1% threshold, skipping")
+                        continue
                     rec = {
                         "report_date": today_str,
                         "ticker": ticker,
@@ -1162,6 +1156,23 @@ def _assemble_sections(
     return sections_data
 
 
+def _send_to_subscribers(conn: sqlite3.Connection, subject: str, html: str):
+    """Send the same scan HTML to all active Fischer subscribers."""
+    try:
+        from .fischer_subscribers import get_all_active_subscribers
+        from .postmaster import send_email as _send
+
+        subscribers = get_all_active_subscribers(conn)
+        for sub in subscribers:
+            try:
+                _send(subject, html, to_addr=sub["email"])
+                log.info(f"Fischer scan sent to subscriber {sub['email']}")
+            except Exception as e:
+                log.error(f"Fischer scan send to {sub['email']} failed: {e}")
+    except Exception as e:
+        log.error(f"Fischer subscriber distribution failed: {e}", exc_info=True)
+
+
 def send_scan_report(db_path: str, slot: ScanSlot = "opening"):
     """Generate unified Fischer report: 4 sections, one email.
 
@@ -1192,6 +1203,10 @@ def send_scan_report(db_path: str, slot: ScanSlot = "opening"):
             today_fmt = date.today().strftime('%b %d')
             subject = f"Fischer Daily Scan \u2014 {config.label} \u2014 {today_fmt}"
             send_email(subject, cached.result_html, to_addr=REPORT_TO)
+            from .db import init_db
+            cache_conn = init_db(db_path)
+            _send_to_subscribers(cache_conn, subject, cached.result_html)
+            cache_conn.close()
             return
 
     conn = None
@@ -1221,6 +1236,9 @@ def send_scan_report(db_path: str, slot: ScanSlot = "opening"):
         subject = f"Fischer Daily Scan \u2014 {config.label} \u2014 {today_fmt}"
         send_email(subject, html, to_addr=REPORT_TO)
 
+        # Phase 4: Send to active subscribers
+        _send_to_subscribers(conn, subject, html)
+
         # Store in cache
         if rel and rel.cache:
             rel.cache.put(f"scan_{slot}", date.today().isoformat(), html)
@@ -1240,111 +1258,6 @@ def send_daily_report(db_path: str):
     send_scan_report(db_path, slot="opening")
 
 
-def send_subscriber_scan_reports(db_path: str, slot: ScanSlot = "opening"):
-    """After a scheduled scan slot, distribute reports to active subscribers.
-
-    - fischer_daily portfolio subscribers: load cached recs from DB, build email, send
-    - Custom portfolio subscribers: generate fresh scan with their tickers
-    """
-    from .db import init_db, migrate_db
-    from .postmaster import send_email
-    from .fischer_subscribers import get_all_active_subscribers
-
-    config = SCAN_SLOTS[slot]
-    conn = None
-    try:
-        conn = init_db(db_path)
-        migrate_db(conn)
-
-        subscribers = get_all_active_subscribers(conn)
-        if not subscribers:
-            return
-
-        # Group subscribers by portfolio for efficiency
-        from collections import defaultdict
-        by_portfolio: dict[str, list[dict]] = defaultdict(list)
-        for sub in subscribers:
-            by_portfolio[sub["portfolio_name"]].append(sub)
-
-        for portfolio_name, subs in by_portfolio.items():
-            try:
-                _distribute_to_portfolio_subscribers(
-                    conn, config, slot, portfolio_name, subs, send_email
-                )
-            except Exception as e:
-                log.error(f"Fischer {slot} subscriber distribution for "
-                          f"'{portfolio_name}' failed: {e}", exc_info=True)
-
-    except Exception as e:
-        log.error(f"Fischer {slot} subscriber distribution failed: {e}",
-                  exc_info=True)
-    finally:
-        if conn:
-            conn.close()
-
-
-def _distribute_to_portfolio_subscribers(
-    conn: sqlite3.Connection,
-    config: ScanSlotConfig,
-    slot: ScanSlot,
-    portfolio_name: str,
-    subscribers: list[dict],
-    send_email,
-):
-    """Send scheduled scan results to all subscribers on a given portfolio."""
-    from .fischer_subscribers import get_portfolio
-
-    portfolio = get_portfolio(conn, portfolio_name)
-    if not portfolio:
-        log.error(f"Fischer subscriber dist: portfolio '{portfolio_name}' not found")
-        return
-
-    tickers = portfolio["tickers"]
-    show_conviction = portfolio["show_conviction"]
-    label = portfolio["label"]
-
-    # If portfolio tickers are all in the scan universe, load cached recs from DB
-    scan_set = set(SCAN_TICKERS)
-    if set(tickers).issubset(scan_set):
-        today_str = date.today().isoformat()
-        put_recs = _load_slot_recs(conn, today_str, slot, "covered_put", tickers)
-        call_recs = _load_slot_recs(conn, today_str, slot, "covered_call", tickers)
-        put_weekly = _load_slot_recs(conn, today_str, f"{slot}_weekly", "covered_put", tickers)
-        call_weekly = _load_slot_recs(conn, today_str, f"{slot}_weekly", "covered_call", tickers)
-        failed = []
-    else:
-        # Custom portfolio with tickers outside the universe — generate fresh scan
-        put_recs, call_recs, put_weekly, call_weekly, failed = generate_fresh_scan(
-            tickers=tickers,
-            share_alloc=portfolio["share_alloc"],
-            show_conviction=show_conviction,
-        )
-
-    if not put_recs and not call_recs and not put_weekly and not call_weekly:
-        log.info(f"Fischer subscriber dist: no results for '{portfolio_name}', skipping")
-        return
-
-    html = _build_recommendation_email(
-        put_recs=put_recs,
-        call_recs=call_recs,
-        put_weekly=put_weekly,
-        call_weekly=call_weekly,
-        failed_tickers=failed,
-        slot_label=config.label,
-        group_label=label,
-        show_conviction=show_conviction,
-        display_order=tickers,
-    )
-    today_fmt = date.today().strftime('%b %d')
-    subject = f"Fischer {label} — {config.label} — {today_fmt}"
-
-    for sub in subscribers:
-        try:
-            send_email(subject, html, to_addr=sub["email"])
-            log.info(f"Fischer {slot} subscriber report sent to {sub['email']} "
-                     f"({portfolio_name})")
-        except Exception as e:
-            log.error(f"Fischer {slot} subscriber send to {sub['email']} failed: {e}")
 
 
 def _generate_with_ticker_tracking(
@@ -1499,11 +1412,15 @@ def _generate_weekly_recs(
                          f"MaxP=${best.max_profit_per_share:.2f} "
                          f"P(Win)={best.p_profit:.1%}")
             else:
-                best = min(ranked, key=lambda r: min(
-                    abs(r.p_profit - R["min_p_win"]), abs(r.p_profit - R["max_p_win"])))
-                flag = "near_miss"
-                log.info(f"  {ticker}: weekly near miss K={best.strike} "
-                         f"P(Win)={best.p_profit:.1%} (outside band)")
+                log.info(f"  {ticker}: weekly no strike in ratio band, skipping")
+                continue
+
+            # Min profit threshold: 1% of stock value
+            if best.spot and best.max_profit_per_share / best.spot < 0.01:
+                log.info(f"  {ticker}: weekly max profit "
+                         f"{best.max_profit_per_share/best.spot:.2%}"
+                         f" < 1% threshold, skipping")
+                continue
 
             rec = {
                 "ticker": ticker,
@@ -1577,6 +1494,7 @@ def _select_best_candidate(ranked: list, ticker: str, intent: str = "covered_put
     if not ranked:
         return None
 
+    _log_debug_strikes(ticker, intent, ranked)
     R = _rules(intent)
     in_band = [r for r in ranked
                if R["min_p_win"] <= r.p_profit <= R["max_p_win"]
@@ -1596,9 +1514,9 @@ def _select_best_candidate(ranked: list, ticker: str, intent: str = "covered_put
             best = max(later, key=lambda r: r.max_profit_per_share)
             return (best, "deferred")
     else:
-        best = min(ranked, key=lambda r: min(
-            abs(r.p_profit - R["min_p_win"]), abs(r.p_profit - R["max_p_win"])))
-        return (best, "near_miss")
+        # No strike passes ratio/P(Win) band — skip this ticker
+        log.info(f"  {ticker}: no strike in ratio band, skipping")
+        return None
 
 
 def generate_fresh_scan(
@@ -1638,6 +1556,11 @@ def generate_fresh_scan(
                 result = _select_best_candidate(ranked, ticker, intent=intent)
                 if result:
                     ev, flag = result
+                    # Min profit threshold: 1% of stock value
+                    if ev.spot and ev.max_profit_per_share / ev.spot < 0.01:
+                        log.info(f"  {ticker}: max profit {ev.max_profit_per_share/ev.spot:.2%}"
+                                 f" < 1% threshold, skipping")
+                        continue
                     candidates.append((ticker, ev, flag))
             except Exception as e:
                 log.error(f"  {ticker}: scan failed: {e}", exc_info=True)

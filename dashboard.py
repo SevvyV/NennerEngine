@@ -430,6 +430,17 @@ SIGNAL_TABLE_STYLE_DATA_CONDITIONAL = [
         "if": {"filter_query": '{sharpe} < 0.2 && {sharpe} != ""', "column_id": "sharpe"},
         "color": COLOR_PF_BAD,
     },
+    # P/L% conditional coloring: green positive, red negative
+    {
+        "if": {"filter_query": '{pnl_pct} contains "+"', "column_id": "pnl_pct"},
+        "color": COLOR_BUY,
+        "fontWeight": "bold",
+    },
+    {
+        "if": {"filter_query": '{pnl_pct} contains "-"', "column_id": "pnl_pct"},
+        "color": COLOR_SELL,
+        "fontWeight": "bold",
+    },
     # Score conditional coloring: >= 50 green, 30-50 amber, < 30 red
     {
         "if": {"filter_query": '{score} >= 50', "column_id": "score"},
@@ -622,7 +633,17 @@ def refresh_dashboard(_n, _btn):
     ]
 
     # Signal board — split into Single Stocks vs Macro
-    state_data = fetch_current_state()
+    try:
+        from nenner_engine.prices import get_prices_with_signal_context
+        sig_conn = get_db()
+        state_data = get_prices_with_signal_context(sig_conn, try_t1=True)
+        sig_conn.close()
+        # Filter to last 3 months (same as old fetch_current_state)
+        from datetime import datetime, timedelta
+        cutoff = (datetime.now() - timedelta(days=90)).strftime("%Y-%m-%d")
+        state_data = [r for r in state_data if (r.get("last_signal_date") or "") >= cutoff]
+    except Exception:
+        state_data = fetch_current_state()
 
     # Merge Profit Factor + Win% from trade_stats
     try:
@@ -645,6 +666,13 @@ def refresh_dashboard(_n, _btn):
         row["trigger_level"] = f"{row['trigger_level']:,.2f}" if row.get("trigger_level") else ""
         row["implied_reversal"] = 1 if row.get("implied_reversal") else 0
 
+        # Format live price fields (from get_prices_with_signal_context)
+        row["price"] = f"{row['price']:,.2f}" if row.get("price") else ""
+        pnl = row.get("pnl_pct")
+        row["pnl_pct"] = f"{pnl:+.1f}%" if pnl is not None else ""
+        cdist = row.get("cancel_dist_pct")
+        row["cancel_dist_pct"] = f"{abs(cdist):.1f}%" if cdist is not None else ""
+
     stocks_data = [r for r in state_data if r.get("asset_class") == "Single Stock"]
     macro_data = [r for r in state_data if r.get("asset_class") != "Single Stock"]
 
@@ -655,6 +683,9 @@ def refresh_dashboard(_n, _btn):
         {"name": "Signal", "id": "effective_signal"},
         {"name": "From", "id": "origin_price"},
         {"name": "Cancel", "id": "cancel_level"},
+        {"name": "Price", "id": "price"},
+        {"name": "P/L%", "id": "pnl_pct", "type": "numeric"},
+        {"name": "Dist%", "id": "cancel_dist_pct", "type": "numeric"},
         {"name": "Impl", "id": "implied_reversal"},
         {"name": "Date", "id": "last_signal_date"},
         {"name": "PF", "id": "pf", "type": "numeric"},

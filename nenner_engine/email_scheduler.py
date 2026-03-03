@@ -47,10 +47,10 @@ STOCK_REPORT_HOUR = 7       # 7:00 AM ET
 STOCK_REPORT_MINUTE = 0
 
 # Fischer scan schedule: (hour, minute, slot_name)
-# Three daily scans: opening, midday, closing
+# Two daily scans: opening and closing (midday disabled for now)
 FISCHER_SCAN_SCHEDULE: list[tuple[int, int, str]] = [
     (9, 45, "opening"),
-    (12, 0, "midday"),
+    # (12, 0, "midday"),
     (15, 45, "closing"),
 ]
 
@@ -272,11 +272,6 @@ def _send_fischer_scan_report(db_path: str, slot: str):
             rel.wrap_scan_call(db_path, slot, lambda p, s: send_scan_report(p, slot=s))
         else:
             send_scan_report(db_path, slot=slot)
-        # TODO: Re-enable when custom subscriber portfolios are onboarded.
-        # Disabled because fischer_daily portfolio duplicates the admin Daily Scan.
-        # When re-enabling, also align _build_recommendation_email layout with
-        # _build_unified_email for formatting consistency.
-        # send_subscriber_scan_reports(db_path, slot=slot)
     except Exception as e:
         log.error(f"Fischer {slot} report failed: {e}", exc_info=True)
 
@@ -646,16 +641,37 @@ class EmailScheduler:
             _send_stock_report(self.db_path)
 
     def _startup_fischer_catchup(self):
-        """Send missed Fischer scans on startup if past their scheduled windows."""
+        """Send missed Fischer scans on startup if past their scheduled windows.
+
+        Checks the DB (fischer_recommendations) to avoid duplicate sends across
+        restarts — the in-memory _fischer_sent_slots set resets each launch.
+        """
         now_et = _now_eastern()
         if now_et.weekday() >= 5:
             return  # weekend
 
         today_str = now_et.strftime("%Y-%m-%d")
+
+        # Pre-populate sent_slots from DB so restarts don't re-fire
+        try:
+            from .db import init_db
+            conn = init_db(self.db_path)
+            existing = conn.execute(
+                "SELECT DISTINCT scan_slot FROM fischer_recommendations "
+                "WHERE report_date = ?", (today_str,)
+            ).fetchall()
+            conn.close()
+            for row in existing:
+                slot_key = f"{today_str}_{row[0]}"
+                self._fischer_sent_slots.add(slot_key)
+                log.info(f"Fischer catchup: {row[0]} already sent today (from DB), skipping")
+        except Exception as e:
+            log.warning(f"Fischer catchup DB check failed: {e}")
+
         for sched_hour, sched_minute, slot in FISCHER_SCAN_SCHEDULE:
             slot_key = f"{today_str}_{slot}"
             if slot_key in self._fischer_sent_slots:
-                continue  # already sent this session
+                continue  # already sent this session or found in DB
 
             scheduled = now_et.replace(
                 hour=sched_hour, minute=sched_minute, second=0, microsecond=0)
