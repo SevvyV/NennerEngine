@@ -29,6 +29,7 @@ log = logging.getLogger("fischer")
 
 # Paths to subprocess helpers (same directory as this file)
 _XL_READER = str(Path(__file__).parent / "_xl_reader.py")
+_OC_READER = str(Path(__file__).parent / "_oc_reader.py")
 _POS_READER = str(Path(__file__).parent / "_pos_reader.py")
 
 # Python executable — use the same one running this process
@@ -183,6 +184,106 @@ def _cleanup(path: str) -> None:
         os.unlink(path)
     except OSError:
         pass
+
+
+# ---------------------------------------------------------------------------
+# Bulk reader — reads ALL 17 put+call chains from OptionChains.xlsm in one pass
+# ---------------------------------------------------------------------------
+
+_ChainDict = dict[str, tuple[pd.DataFrame, "ChainMeta"]]
+
+
+def read_all_chains(
+    timeout_seconds: int = 45,
+    workbook_name: str = "OptionChains.xlsm",
+) -> tuple[_ChainDict, _ChainDict]:
+    """Read all 17 put and call chains from OptionChains.xlsm in a single subprocess.
+
+    Returns (put_chains, call_chains) where each is a dict mapping
+    ticker -> (DataFrame, ChainMeta).  DataFrames have the standard
+    CHAIN_COLUMNS schema.  Does NOT populate _chain_cache.
+    Returns ({}, {}) on failure (graceful degradation).
+    """
+    tmp_fd, tmp_path = tempfile.mkstemp(suffix=".json", prefix="fischer_oc_")
+    os.close(tmp_fd)
+
+    log.info("Bulk-reading all chains from %s (timeout=%ds)", workbook_name, timeout_seconds)
+    try:
+        proc = subprocess.Popen(
+            [_PYTHON, _OC_READER, workbook_name, tmp_path],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+        proc.wait(timeout=timeout_seconds)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+        _cleanup(tmp_path)
+        log.warning("OptionChains bulk read timed out after %ds", timeout_seconds)
+        return {}, {}
+    except FileNotFoundError:
+        _cleanup(tmp_path)
+        log.warning("Cannot find _oc_reader.py at %s", _OC_READER)
+        return {}, {}
+
+    try:
+        raw = Path(tmp_path).read_text(encoding="utf-8").strip()
+    except Exception as e:
+        _cleanup(tmp_path)
+        log.warning("Cannot read OptionChains subprocess output: %s", e)
+        return {}, {}
+    finally:
+        _cleanup(tmp_path)
+
+    if not raw:
+        log.warning("OptionChains reader returned no output")
+        return {}, {}
+
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        log.warning("OptionChains reader returned invalid JSON: %s", raw[:200])
+        return {}, {}
+
+    if not data.get("ok"):
+        log.warning("OptionChains reader error: %s", data.get("error", "unknown"))
+        return {}, {}
+
+    rate = data.get("rate", 0.045)
+    expiry_strs = data.get("expiries", [])
+    expiry_dates = [date.fromisoformat(e) for e in expiry_strs]
+
+    def _build_chain_dict(tickers_data: dict, failed_key: str) -> _ChainDict:
+        result = {}
+        for ticker, tdata in tickers_data.items():
+            rows = tdata.get("rows", [])
+            if not rows:
+                continue
+            for row in rows:
+                row["expiry"] = date.fromisoformat(row["expiry"])
+            chain_df = pd.DataFrame(rows, columns=CHAIN_COLUMNS)
+            chain_df = chain_df.sort_values(["type", "expiry", "strike"]).reset_index(drop=True)
+            meta = ChainMeta(
+                ticker=ticker,
+                spot=tdata["spot"],
+                rate=rate,
+                div_yield=0.0,
+                source="LIVE",
+                timestamp=datetime.now(),
+                expiries=expiry_dates,
+            )
+            result[ticker] = (chain_df, meta)
+        if data.get(failed_key):
+            log.info("OptionChains %s: no data for %s", failed_key, ", ".join(data[failed_key]))
+        return result
+
+    put_chains = _build_chain_dict(data.get("puts", {}), "failed_puts")
+    call_chains = _build_chain_dict(data.get("calls", {}), "failed_calls")
+
+    log.info("Bulk-loaded %d put + %d call chains from OptionChains", len(put_chains), len(call_chains))
+    return put_chains, call_chains
 
 
 # ---------------------------------------------------------------------------

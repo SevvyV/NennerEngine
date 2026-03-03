@@ -53,13 +53,25 @@ SCAN_TICKERS: list[str] = list(ALWAYS_TICKERS) + list(MACRO_POOL)
 
 CAPITAL = 500_000
 TOP_N = 99  # show all tickers per group (no limit)
-MIN_P_WIN = 0.55   # minimum P(Win) to qualify
-MAX_P_WIN = 0.65   # maximum P(Win) — exclude deep ITM / penny premium
-MAX_P_OTM = 0.55   # maximum P(OTM) — reject if too likely to expire worthless
+# Filter rules per intent — puts and calls can be tuned independently
+_PUT_RULES = {
+    "min_p_win": 0.55,
+    "max_p_win": 0.65,
+    "max_p_otm": 0.60,
+    "min_ratio": 0.70,
+    "max_ratio": 3.0,
+}
+_CALL_RULES = {
+    "min_p_win": 0.55,
+    "max_p_win": 0.65,
+    "max_p_otm": 0.60,
+    "min_ratio": 0.70,
+    "max_ratio": 3.0,
+}
 
-# Premium:Directional ratio band for macro ranking
-MIN_RATIO = 1.0    # below 1:1 = just shorting stock with extra steps
-MAX_RATIO = 3.0    # above 3:1 = pure premium harvesting, no directional edge
+def _rules(intent: str) -> dict:
+    """Return the filter rules dict for a given intent."""
+    return _CALL_RULES if intent == "covered_call" else _PUT_RULES
 
 # ---------------------------------------------------------------------------
 # Report Sections — 4 DTE × Intent combinations in a single email
@@ -80,12 +92,6 @@ REPORT_SECTIONS: tuple[ReportSection, ...] = (
     ReportSection("covered_put",  (8, 14),
                   "Covered Puts 8\u201314 DTE",
                   "Entry assumes short sale at current spot", "put"),
-    ReportSection("covered_call", (0, 7),
-                  "Covered Calls 0\u20137 DTE",
-                  "Entry assumes long stock at current spot", "call"),
-    ReportSection("covered_call", (8, 14),
-                  "Covered Calls 8\u201314 DTE",
-                  "Entry assumes long stock at current spot", "call"),
 )
 
 def _calc_shares(spot: float, capital: int = CAPITAL) -> int:
@@ -98,20 +104,22 @@ def _calc_shares(spot: float, capital: int = CAPITAL) -> int:
 def _select_macro_tickers(
     macro_results: dict[str, dict],
     n: int = MACRO_PICKS,
+    intent: str = "covered_put",
 ) -> list[str]:
     """Rank macro pool tickers by premium_ratio quality, return top N.
 
-    Filters to ratio within [MIN_RATIO, MAX_RATIO] and P(Win) >= MIN_P_WIN.
+    Filters to ratio within [min_ratio, max_ratio] and P(Win) >= min_p_win.
     If fewer than N qualify, returns all that qualify.
     """
+    R = _rules(intent)
     eligible = []
     for ticker, rec in macro_results.items():
         ratio = rec.get("premium_ratio")
         if ratio is None:
             continue
-        if not (MIN_RATIO <= ratio <= MAX_RATIO):
+        if not (R["min_ratio"] <= ratio <= R["max_ratio"]):
             continue
-        if rec.get("p_win", 0) < MIN_P_WIN:
+        if rec.get("p_win", 0) < R["min_p_win"]:
             continue
         # Prefer ratios near 2:1 (center of band) — lower distance = better
         dist_from_center = abs(ratio - 2.0)
@@ -165,6 +173,7 @@ def _scan_ticker(
     ticker: str,
     dte_range: tuple[int, int] | None = None,
     intent: str = "covered_put",
+    chain_data: tuple | None = None,
 ) -> list:
     """Run the Fischer EV pipeline for one ticker, return ranked EVResults.
 
@@ -174,6 +183,8 @@ def _scan_ticker(
     dte_range : optional (min_dte, max_dte) inclusive filter.
                 If None, uses conviction-based max_dte with min=0.
     intent : "covered_put" or "covered_call"
+    chain_data : optional pre-loaded (DataFrame, ChainMeta) from bulk read.
+                 If provided, skips the read_chain() retry loop.
     """
     from .fischer_engine import (
         compute_ev, implied_volatility, rank_strikes, time_to_expiry,
@@ -185,30 +196,36 @@ def _scan_ticker(
 
     chain_df = None
     meta = None
-    for attempt in range(_CHAIN_RETRY_ATTEMPTS):
-        try:
-            chain_df, meta = read_chain(ticker)
-        except (StaleChainError, Exception) as e:
-            log.warning(f"Fischer daily: chain error for {ticker}: {e}")
-            return []
 
-        if chain_df.empty:
-            return []
+    if chain_data is not None:
+        # Pre-loaded from OptionChains bulk read — skip subprocess
+        chain_df, meta = chain_data
+    else:
+        # Fall back to per-ticker read from Options_RT
+        for attempt in range(_CHAIN_RETRY_ATTEMPTS):
+            try:
+                chain_df, meta = read_chain(ticker)
+            except (StaleChainError, Exception) as e:
+                log.warning(f"Fischer daily: chain error for {ticker}: {e}")
+                return []
 
-        # Validate: check that bids have populated (RTD feed may be slow)
-        opts = chain_df[chain_df["type"] == opt_type]
-        if not opts.empty and opts["bid"].sum() > 0:
-            break  # good data
+            if chain_df.empty:
+                return []
 
-        if attempt < _CHAIN_RETRY_ATTEMPTS - 1:
-            log.info(f"  {ticker}: {opt_type} bids are zero, waiting {_CHAIN_RETRY_DELAY}s "
-                     f"for RTD feed (attempt {attempt + 1}/{_CHAIN_RETRY_ATTEMPTS})")
-            _chain_cache.pop(ticker.upper(), None)
-            _time.sleep(_CHAIN_RETRY_DELAY)
-        else:
-            log.warning(f"  {ticker}: {opt_type} bids still zero after "
-                        f"{_CHAIN_RETRY_ATTEMPTS} attempts")
-            return []
+            # Validate: check that bids have populated (RTD feed may be slow)
+            opts = chain_df[chain_df["type"] == opt_type]
+            if not opts.empty and opts["bid"].sum() > 0:
+                break  # good data
+
+            if attempt < _CHAIN_RETRY_ATTEMPTS - 1:
+                log.info(f"  {ticker}: {opt_type} bids are zero, waiting {_CHAIN_RETRY_DELAY}s "
+                         f"for RTD feed (attempt {attempt + 1}/{_CHAIN_RETRY_ATTEMPTS})")
+                _chain_cache.pop(ticker.upper(), None)
+                _time.sleep(_CHAIN_RETRY_DELAY)
+            else:
+                log.warning(f"  {ticker}: {opt_type} bids still zero after "
+                            f"{_CHAIN_RETRY_ATTEMPTS} attempts")
+                return []
 
     conviction = compute_conviction(ticker, intent)
 
@@ -583,7 +600,6 @@ def _table_header(show_conviction: bool = True, intent: str = "covered_put") -> 
           <th style="padding:10px 12px; text-align:left;">Expiry</th>
           <th style="padding:10px 12px; text-align:left;">Shares</th>
           <th style="padding:10px 12px; text-align:left;">Bid</th>
-          <th style="padding:10px 12px; text-align:left;">IV</th>
           <th style="padding:10px 12px; text-align:left;">P(OTM)</th>
           <th style="padding:10px 12px; text-align:left;">P(Win)</th>
           <th style="padding:10px 12px; text-align:left;">Theta($)</th>
@@ -650,7 +666,6 @@ def _build_rec_row(r: dict, show_conviction: bool = True) -> str:
             <td style="padding:10px 12px;">{expiry_fmt}</td>
             <td style="padding:10px 12px;">{shares:,}</td>
             <td style="padding:10px 12px;">${bid:.2f}</td>
-            <td style="padding:10px 12px;">{iv_pct:.1f}%</td>
             <td style="padding:10px 12px;">{potm_pct:.1f}%</td>
             <td style="{pwin_style}">{pwin_pct:.1f}%</td>
             <td style="padding:10px 12px; font-weight:700; color:{_CLR_GREEN};">
@@ -664,11 +679,11 @@ def _build_rec_row(r: dict, show_conviction: bool = True) -> str:
 
 
 def _sort_recs(recs: list[dict], display_order: tuple[str, ...] | None = None) -> list[dict]:
-    """Sort recs by display_order (group ticker order). Falls back to alpha."""
-    if display_order:
-        order_map = {t: i for i, t in enumerate(display_order)}
-        return sorted(recs, key=lambda r: order_map.get(r["ticker"], 99))
-    return sorted(recs, key=lambda r: r["ticker"])
+    """Sort recs by total max profit (per-share × shares) descending."""
+    def _total_max_profit(r: dict) -> float:
+        shares = _calc_shares(r.get("spot_at_recommend", 0))
+        return r.get("max_profit_per_share", 0) * shares
+    return sorted(recs, key=_total_max_profit, reverse=True)
 
 
 def _build_section(
@@ -709,7 +724,7 @@ def _build_section(
       {section_title}</h2>
     <p style="color:{_CLR_MUTED}; font-size:12px; margin:0 0 6px 0;">
       {entry_note} | Strike = {strike_label} strike |
-      P(Win) band: {MIN_P_WIN:.1%} &ndash; {MAX_P_WIN:.0%}
+      P(Win) band: {_rules(intent)["min_p_win"]:.1%} &ndash; {_rules(intent)["max_p_win"]:.0%}
     </p>
 
     <h3 style="color:{_CLR_HEADER}; font-size:16px; margin:8px 0 4px 0;">
@@ -858,7 +873,7 @@ def _build_unified_email(
       {section.title}</h2>
     <p style="color:{_CLR_MUTED}; font-size:12px; margin:0 0 6px 0;">
       {section.entry_note} | Strike = {section.strike_label} strike |
-      P(Win) floor: {MIN_P_WIN:.0%}
+      P(Win) floor: {_rules(section.intent)["min_p_win"]:.0%}
     </p>
     <div style="overflow-x:auto;">
     <table style="width:100%; border-collapse:collapse; font-size:13px;
@@ -1009,6 +1024,17 @@ def _scan_all_tickers(
     results : dict keyed by (ticker, intent, dte_label) -> rec dict
     failed  : list of tickers where no chain data was available
     """
+    # Phase 0: bulk pre-load put + call chains from OptionChains.xlsm
+    from .fischer_chain import read_all_chains
+    bulk_put_chains: dict = {}
+    bulk_call_chains: dict = {}
+    try:
+        bulk_put_chains, bulk_call_chains = read_all_chains()
+        log.info(f"Fischer {slot}: bulk-loaded {len(bulk_put_chains)} put + "
+                 f"{len(bulk_call_chains)} call chains from OptionChains")
+    except Exception as e:
+        log.warning(f"Fischer {slot}: OptionChains bulk read failed ({e}), falling back to Options_RT")
+
     results = {}
     failed = set()
 
@@ -1030,14 +1056,22 @@ def _scan_all_tickers(
         recs_to_store = []
         for ticker in SCAN_TICKERS:
             log.info(f"Fischer {slot}/{intent}/{dte_label}: scanning {ticker}...")
+
+            # Use bulk-loaded data from OptionChains when available
+            preloaded = None
+            if intent == "covered_put" and ticker in bulk_put_chains:
+                preloaded = bulk_put_chains[ticker]
+            elif intent == "covered_call" and ticker in bulk_call_chains:
+                preloaded = bulk_call_chains[ticker]
+
             try:
-                ranked = _scan_ticker(ticker, dte_range=dte_range, intent=intent)
+                ranked = _scan_ticker(ticker, dte_range=dte_range, intent=intent, chain_data=preloaded)
                 if not ranked:
                     log.info(f"  {ticker}: no chain data")
                     failed.add(ticker)
                     continue
 
-                result = _select_best_candidate(ranked, ticker)
+                result = _select_best_candidate(ranked, ticker, intent=intent)
                 if result:
                     ev, flag = result
                     rec = {
@@ -1120,7 +1154,7 @@ def _assemble_sections(
             if key in all_results:
                 macro_candidates[t] = all_results[key]
 
-        selected_macro = _select_macro_tickers(macro_candidates)
+        selected_macro = _select_macro_tickers(macro_candidates, intent=intent)
         macro_recs = [macro_candidates[t] for t in selected_macro]
 
         sections_data[section] = always_recs + macro_recs
@@ -1348,7 +1382,7 @@ def _generate_with_ticker_tracking(
                 failed_tickers.append(ticker)
                 continue
 
-            result = _select_best_candidate(ranked, ticker)
+            result = _select_best_candidate(ranked, ticker, intent=intent)
             if result:
                 best, flag = result
                 if flag == "clean":
@@ -1450,11 +1484,12 @@ def _generate_weekly_recs(
                 failed_tickers.append(ticker)
                 continue
 
+            R = _rules(intent)
             in_band = [r for r in ranked
-                       if MIN_P_WIN <= r.p_profit <= MAX_P_WIN
-                       and r.p_expire_worthless <= MAX_P_OTM
+                       if R["min_p_win"] <= r.p_profit <= R["max_p_win"]
+                       and r.p_expire_worthless <= R["max_p_otm"]
                        and r.premium_ratio is not None
-                       and MIN_RATIO <= r.premium_ratio <= MAX_RATIO]
+                       and R["min_ratio"] <= r.premium_ratio <= R["max_ratio"]]
 
             if in_band:
                 best = max(in_band, key=lambda r: r.max_profit_per_share)
@@ -1465,7 +1500,7 @@ def _generate_weekly_recs(
                          f"P(Win)={best.p_profit:.1%}")
             else:
                 best = min(ranked, key=lambda r: min(
-                    abs(r.p_profit - MIN_P_WIN), abs(r.p_profit - MAX_P_WIN)))
+                    abs(r.p_profit - R["min_p_win"]), abs(r.p_profit - R["max_p_win"])))
                 flag = "near_miss"
                 log.info(f"  {ticker}: weekly near miss K={best.strike} "
                          f"P(Win)={best.p_profit:.1%} (outside band)")
@@ -1532,7 +1567,7 @@ def _generate_weekly_recs(
 # On-Demand Fresh Scan (no DB dedup, no DB storage)
 # ---------------------------------------------------------------------------
 
-def _select_best_candidate(ranked: list, ticker: str) -> tuple | None:
+def _select_best_candidate(ranked: list, ticker: str, intent: str = "covered_put") -> tuple | None:
     """Pick the best EVResult from ranked results using P(Win) band filtering.
 
     Returns (ev, flag) or None if no results.
@@ -1542,11 +1577,12 @@ def _select_best_candidate(ranked: list, ticker: str) -> tuple | None:
     if not ranked:
         return None
 
+    R = _rules(intent)
     in_band = [r for r in ranked
-               if MIN_P_WIN <= r.p_profit <= MAX_P_WIN
-               and r.p_expire_worthless <= MAX_P_OTM
+               if R["min_p_win"] <= r.p_profit <= R["max_p_win"]
+               and r.p_expire_worthless <= R["max_p_otm"]
                and r.premium_ratio is not None
-               and MIN_RATIO <= r.premium_ratio <= MAX_RATIO]
+               and R["min_ratio"] <= r.premium_ratio <= R["max_ratio"]]
 
     if in_band:
         today_date = date.today()
@@ -1561,7 +1597,7 @@ def _select_best_candidate(ranked: list, ticker: str) -> tuple | None:
             return (best, "deferred")
     else:
         best = min(ranked, key=lambda r: min(
-            abs(r.p_profit - MIN_P_WIN), abs(r.p_profit - MAX_P_WIN)))
+            abs(r.p_profit - R["min_p_win"]), abs(r.p_profit - R["max_p_win"])))
         return (best, "near_miss")
 
 
@@ -1599,7 +1635,7 @@ def generate_fresh_scan(
                     failed.append(ticker)
                     continue
 
-                result = _select_best_candidate(ranked, ticker)
+                result = _select_best_candidate(ranked, ticker, intent=intent)
                 if result:
                     ev, flag = result
                     candidates.append((ticker, ev, flag))

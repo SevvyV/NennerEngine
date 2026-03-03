@@ -156,9 +156,9 @@ Covered-put-only options overlay on high-vol names with tri-weekly (Mon/Wed/Fri)
 
 ### Ranking — Premium:Directional Ratio
 - `premium_ratio = premium / (spot - strike)` for covered puts
-- **Band: 3:1 to 1:1** — trades outside this band are filtered out
+- **Band: 3:1 to 0.7:1** — trades outside this band are filtered out
   - Above 3:1 = pure premium harvesting, not enough directional upside
-  - Below 1:1 = just shorting stock with extra steps, too directional
+  - Below 0.7:1 = just shorting stock with extra steps, too directional
 - **P(Win) floor:** 55% minimum
 - Macro tickers ranked by ratio quality within band; top 5 selected
 
@@ -183,7 +183,16 @@ Covered-put-only options overlay on high-vol names with tri-weekly (Mon/Wed/Fri)
 | Fischer signals | `nenner_engine/fischer_signals.py` (Nenner signal integration) |
 | Fischer subscribers | `nenner_engine/fischer_subscribers.py` (subscriber CRUD, IMAP polling) |
 | Strike increments | `nenner_engine/strike_increments.json` (per-ticker strike step sizes) |
+| OptionChains workbook | `E:\Workspace\DataCenter\OptionChains.xlsm` (pre-loaded RTD chains) |
+| OptionChains builder | `E:\Workspace\DataCenter\build_option_chains.py` (rebuild sheets) |
 | Fischer reliability | `nenner_engine/fischer_reliability.py` (9 safeguards, singleton facade) |
+
+### OptionChains.xlsm Layout
+- **PutChains** + **CallChains** sheets: 17 tickers × 11 strikes × 4 expiries
+- Strike formulas reference increment cell `$C$<header_row>` — change the cell to adjust spacing
+- Increments sourced from `strike_increments.json` at build time, editable in-sheet afterward
+- Rebuild command: `python E:/Workspace/DataCenter/build_option_chains.py`
+- Bulk reader (`_oc_reader.py`) reads all 17 tickers in one pass — no ticker switching
 
 ### Fischer Reliability Architecture
 Nine composable safeguards in `fischer_reliability.py`, unified under `FischerReliability` singleton:
