@@ -93,10 +93,6 @@ YFINANCE_MAP: dict[str, str | None] = {
     "MSFT":     "MSFT",
     "NVDA":     "NVDA",
     "TSLA":     "TSLA",
-    "AMZN":     "AMZN",
-    "MMM":      "MMM",
-    "C":        "C",
-    "GS":       "GS",
     "QQQ":      "QQQ",
     "SIL":      "SIL",
 }
@@ -183,10 +179,6 @@ LSEG_RIC_MAP: dict[str, str | None] = {
     "MSFT":     "MSFT",
     "NVDA":     "NVDA",
     "TSLA":     "TSLA",
-    "AMZN":     "AMZN",
-    "MMM":      "MMM",
-    "C":        "C",
-    "GS":       "GS",
     "QQQ":      "QQQ",
     "SIL":      "SIL",
 }
@@ -706,8 +698,7 @@ def setup_t1_sheet():
         ("Single Stocks", [
             ("AAPL", "AAPL"), ("GOOG", "GOOG"), ("BAC", "BAC"),
             ("MSFT", "MSFT"), ("NVDA", "NVDA"), ("TSLA", "TSLA"),
-            ("AMZN", "AMZN"), ("MMM", "MMM"),
-            ("C", "C"), ("GS", "GS"), ("NEM", "NEM"),
+            ("NEM", "NEM"),
         ]),
         ("Precious Metals", [
             ("GC", "GC/1"), ("SI", "SI/1"), ("HG", "HG/1"),

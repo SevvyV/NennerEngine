@@ -81,11 +81,7 @@ INSTRUMENT_MAP = {
     "Microsoft": {"ticker": "MSFT", "asset_class": "Single Stock", "aliases": ["MSFT", "Microsoft (MSFT)"]},
     "Nvidia": {"ticker": "NVDA", "asset_class": "Single Stock", "aliases": ["NVDA", "Nvidia (NVDA)"]},
     "Tesla": {"ticker": "TSLA", "asset_class": "Single Stock", "aliases": ["TSLA", "Tesla (TSLA)"]},
-    "Amazon": {"ticker": "AMZN", "asset_class": "Single Stock", "aliases": ["AMZN", "Amazon (AMZN)"]},
-    "3M Company": {"ticker": "MMM", "asset_class": "Single Stock", "aliases": ["3M"]},
-    # "American Express": {"ticker": "AXP", "asset_class": "Single Stock", "aliases": []},  # Removed — one-time Nenner call
-    "Citibank": {"ticker": "C", "asset_class": "Single Stock", "aliases": ["Citi"]},
-    "Goldman Sachs": {"ticker": "GS", "asset_class": "Single Stock", "aliases": []},
+    # AMZN, MMM, C, GS removed — one-off Nenner calls, never updated
 }
 
 # Build reverse lookup: text fragment -> (instrument_name, ticker, asset_class)
@@ -166,11 +162,7 @@ SECTION_HEADERS = [
     (r'Microsoft\s*\(MSFT\)|MSFT\s*(?:Daily|Weekly|Monthly)', "Microsoft", "MSFT", "Single Stock"),
     (r'Nvidia\s*\(NVDA\)|NVDA\s*(?:Daily|Weekly|Monthly)', "Nvidia", "NVDA", "Single Stock"),
     (r'Tesla\s*\(TSLA\)|TSLA\s*(?:Daily|Weekly|Monthly)', "Tesla", "TSLA", "Single Stock"),
-    (r'Amazon\s*\(AMZN\)', "Amazon", "AMZN", "Single Stock"),
-    (r'3M Company', "3M Company", "MMM", "Single Stock"),
-    # (r'American Express', "American Express", "AXP", "Single Stock"),  # Removed — one-time Nenner call
-    (r'Citibank', "Citibank", "C", "Single Stock"),
-    (r'Goldman Sachs(?!\s+Commodity)', "Goldman Sachs", "GS", "Single Stock"),
+    # AMZN, MMM, C, GS removed — one-off Nenner calls, never updated
 ]
 
 

@@ -56,7 +56,7 @@ ETF_TO_NENNER: dict[str, str] = {
 
 # Stocks covered directly by Nenner (map to self)
 NENNER_DIRECT_STOCKS = {
-    "AAPL", "GOOG", "BAC", "MSFT", "NVDA", "TSLA", "AMZN", "MMM", "C", "GS",
+    "AAPL", "GOOG", "BAC", "MSFT", "NVDA", "TSLA",
 }
 
 

@@ -521,7 +521,10 @@ class TestStrikeRanking:
                 delta=-0.15 if K < 100 else -0.50,
                 gamma=0.05, theta=-0.02, vega=0.10, rho=-0.01,
                 p_expire_worthless=0.85, p_assignment=0.15,
-                premium_collected=200, expected_assignment_loss=180,
+                entry_used=100.0, expected_close=K + 0.5,
+                max_profit_per_share=2.10 + (100.0 - K),
+                p_profit=0.80,
+                premium_collected=200,
                 net_ev_per_contract=ev, net_ev_per_position=ev * 10,
                 contracts=10, nenner_score=70,
                 spot=100, rate=0.05, div_yield=0.0,
@@ -550,21 +553,27 @@ class TestStrikeRanking:
         alt = [r for r in ranked if "ALTERNATE" in r.flags]
         assert len(alt) == 1
 
-    def test_delta_exceeded_flag(self):
-        """Strikes exceeding delta cap should be flagged."""
+    def test_delta_cap_is_informational_only(self):
+        """Delta cap no longer filters or flags — ranking is pure EV."""
         results = self._make_results()
         ranked = rank_strikes(results, delta_cap=0.35)
-        exceeded = [r for r in ranked if "DELTA_EXCEEDED" in r.flags]
-        # The K=100 strike has delta=-0.50 which exceeds 0.35
-        assert any(r.strike == 100 for r in exceeded)
+        # All 4 strikes should survive (no filtering by delta)
+        assert len(ranked) == 4
+        # K=100 (delta=-0.50) should still be present
+        assert any(r.strike == 100 for r in ranked)
 
-    def test_delta_exceeded_not_labeled_best(self):
-        """A delta-exceeded strike should not be labeled BEST."""
+    def test_high_delta_strike_can_be_best(self):
+        """High-delta strike can be labeled BEST if it has top EV."""
+        # Build results where the high-delta strike has the best EV
+        from dataclasses import replace
         results = self._make_results()
-        ranked = rank_strikes(results, delta_cap=0.35)
+        # Give K=100 (delta=-0.50) the highest EV
+        boosted = [replace(r, net_ev_per_contract=50.0) if r.strike == 100 else r
+                   for r in results]
+        ranked = rank_strikes(boosted, delta_cap=0.35)
         best = [r for r in ranked if "BEST" in r.flags]
         assert len(best) == 1
-        assert "DELTA_EXCEEDED" not in best[0].flags
+        assert best[0].strike == 100
 
 
 class TestGammaWarning:
