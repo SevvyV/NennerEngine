@@ -30,6 +30,8 @@ from queue import Full, Queue
 from typing import Optional
 from zoneinfo import ZoneInfo
 
+from .config import ADMIN_EMAIL
+
 log = logging.getLogger("nenner")
 
 # ---------------------------------------------------------------------------
@@ -324,7 +326,6 @@ class ResilientIMAPPoller:
     BACKOFF_BASE = 30
     BACKOFF_CAP = 300
     ALERT_THRESHOLD = 3
-    ADMIN_EMAIL = "sevagshop@gmail.com"
 
     def __init__(self):
         self._consecutive_failures = 0
@@ -393,7 +394,7 @@ class ResilientIMAPPoller:
                 subtitle=f"IMAP Failure &mdash; {format_et(now_et(), '%b %d %H:%M ET')}",
             )
             send_email("Fischer IMAP Alert — Repeated Failures", body,
-                       to_addr=self.ADMIN_EMAIL)
+                       to_addr=ADMIN_EMAIL)
             log.warning(f"IMAPPoller: admin alert sent after {fail_count} failures")
         except Exception as e:
             log.error(f"IMAPPoller: failed to send admin alert: {e}")
@@ -408,7 +409,6 @@ class ScanGuard:
 
     FAIL_THRESHOLD = 8
     TOTAL_TICKERS = 17
-    ADMIN_EMAIL = "sevagshop@gmail.com"
 
     def check_abort(self, failed_tickers: list[str], slot: str) -> bool:
         """Return True if scan should be aborted (too many failures).
@@ -439,7 +439,7 @@ class ScanGuard:
                 subtitle=f"{slot.title()} &mdash; {format_et(now_et(), '%b %d %H:%M ET')}",
             )
             send_email(f"Fischer Scan Aborted — {slot.title()}", body,
-                       to_addr=self.ADMIN_EMAIL)
+                       to_addr=ADMIN_EMAIL)
         except Exception as e:
             log.error(f"ScanGuard: failed to send abort alert: {e}")
 

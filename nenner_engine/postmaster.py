@@ -31,6 +31,8 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import Optional
 
+from .config import SMTP_SERVER, SMTP_PORT, SMTP_TIMEOUT
+
 log = logging.getLogger("nenner")
 
 # ---------------------------------------------------------------------------
@@ -182,7 +184,7 @@ def send_email(subject: str, html_body: str,
     msg.attach(html_part)
 
     try:
-        with smtplib.SMTP("smtp.gmail.com", 587, timeout=30) as server:
+        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT, timeout=SMTP_TIMEOUT) as server:
             server.starttls()
             server.login(gmail_addr, gmail_pass)
             server.send_message(msg)

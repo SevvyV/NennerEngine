@@ -14,13 +14,9 @@ from typing import Optional
 
 from .instruments import INSTRUMENT_MAP, get_instrument_map_json
 
+from .config import LLM_MODEL
+
 log = logging.getLogger("nenner")
-
-# ---------------------------------------------------------------------------
-# Default model
-# ---------------------------------------------------------------------------
-
-DEFAULT_MODEL = "claude-sonnet-4-5-20250929"
 
 # ---------------------------------------------------------------------------
 # System Prompt — The Signal Interpretation Rulebook
@@ -411,7 +407,7 @@ def _validate_ticker(sig: dict) -> bool:
 
 def parse_email_signals_llm(body: str, email_date: str, email_id: int,
                              api_key: str = None,
-                             model: str = DEFAULT_MODEL) -> dict:
+                             model: str = LLM_MODEL) -> dict:
     """Parse all signals, cycles, and price targets from an email body using LLM.
 
     Drop-in replacement for parser.parse_email_signals(). Returns the same

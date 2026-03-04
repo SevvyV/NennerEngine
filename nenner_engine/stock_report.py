@@ -46,13 +46,7 @@ DISPLAY_TICKER = {
     "NQ": "QQQ",
 }
 
-REPORT_MODEL = "claude-sonnet-4-5-20250929"
-REPORT_MAX_TOKENS = 2048
-REPORT_RETRY_ATTEMPTS = 2
-
-# Scheduled send time (Eastern) — 7:00 AM pre-market
-STOCK_REPORT_HOUR = 7
-STOCK_REPORT_MINUTE = 0
+from .config import LLM_MODEL, LLM_MAX_TOKENS_REPORT, LLM_RETRY_ATTEMPTS
 
 # Danger/watch thresholds for cancel distance
 CANCEL_DANGER_PCT = 1.0
@@ -1251,11 +1245,11 @@ def _generate_stanley_take(stocks_data: list[dict], api_key: str) -> str:
     )
 
     last_error = None
-    for attempt in range(REPORT_RETRY_ATTEMPTS + 1):
+    for attempt in range(LLM_RETRY_ATTEMPTS + 1):
         try:
             message = client.messages.create(
-                model=REPORT_MODEL,
-                max_tokens=REPORT_MAX_TOKENS,
+                model=LLM_MODEL,
+                max_tokens=LLM_MAX_TOKENS_REPORT,
                 system=[{
                     "type": "text",
                     "text": REPORT_SYSTEM_PROMPT,
@@ -1266,13 +1260,13 @@ def _generate_stanley_take(stocks_data: list[dict], api_key: str) -> str:
             return message.content[0].text
         except Exception as e:
             last_error = e
-            if attempt < REPORT_RETRY_ATTEMPTS:
+            if attempt < LLM_RETRY_ATTEMPTS:
                 wait = 2 ** (attempt + 1)
                 log.warning(f"Stock report LLM error (attempt {attempt + 1}), "
                             f"retrying in {wait}s: {e}")
                 time.sleep(wait)
 
-    log.error(f"Stock report LLM failed after {REPORT_RETRY_ATTEMPTS + 1} attempts: {last_error}")
+    log.error(f"Stock report LLM failed after {LLM_RETRY_ATTEMPTS + 1} attempts: {last_error}")
     return ""
 
 

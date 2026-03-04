@@ -17,10 +17,9 @@ from .parser import classify_email, extract_text_from_email
 from .llm_parser import parse_email_signals_llm
 from .db import store_email, store_parsed_results
 
-log = logging.getLogger("nenner")
+from .config import NENNER_SENDER, IMAP_SERVER
 
-NENNER_SENDER = "newsletter@charlesnenner.com"
-IMAP_SERVER = "imap.gmail.com"
+log = logging.getLogger("nenner")
 
 
 # ---------------------------------------------------------------------------

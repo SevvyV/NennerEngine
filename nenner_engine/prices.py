@@ -13,6 +13,8 @@ import sqlite3
 from datetime import datetime, date, timedelta
 from typing import Optional
 
+from .config import T1_WORKBOOK
+
 log = logging.getLogger("nenner")
 
 
@@ -196,8 +198,6 @@ _RIC_REVERSE = {v: k for k, v in LSEG_RIC_MAP.items() if v is not None}
 # ---------------------------------------------------------------------------
 # T1 / xlwings Configuration
 # ---------------------------------------------------------------------------
-
-T1_WORKBOOK = r"E:\Workspace\DataCenter\Nenner_DataCenter.xlsm"
 
 # Two-sheet layout in Nenner_DataCenter.xlsm:
 #   Equities_RT    — stocks & ETFs  (col A = ticker, B = BID, E = LAST)

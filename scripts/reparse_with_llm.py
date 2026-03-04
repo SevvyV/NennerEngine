@@ -193,8 +193,8 @@ def main():
         conn.close()
         return
 
-    from nenner_engine.llm_parser import DEFAULT_MODEL
-    effective_model = args.model or DEFAULT_MODEL
+    from nenner_engine.config import LLM_MODEL
+    effective_model = args.model or LLM_MODEL
     log.info(f"Starting LLM parse of {len(emails_to_process)} emails "
              f"({already_done} already done, {total_emails} total) "
              f"with {args.parallel} parallel workers, model={effective_model}"

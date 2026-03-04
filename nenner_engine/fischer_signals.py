@@ -19,12 +19,14 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Optional
 
+from .config import DEFAULT_DB_PATH
+
 log = logging.getLogger("fischer")
 
 # ---------------------------------------------------------------------------
 # Database path — same as nenner_mcp_server.py
 # ---------------------------------------------------------------------------
-DB_PATH = Path(r"E:\Workspace\NennerEngine\nenner_signals.db")
+DB_PATH = Path(DEFAULT_DB_PATH)
 
 # ---------------------------------------------------------------------------
 # §6.2 — ETF to Nenner Futures Ticker Mapping
