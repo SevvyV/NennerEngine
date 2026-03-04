@@ -465,24 +465,21 @@ def _is_workbook_open() -> bool:
 def _send_t1_open_email():
     """Send a one-time email asking user to open the T1 workbook.
 
-    Uses the existing Gmail SMTP infrastructure from stock_report.
     Only sends once per session (tracked by _t1_email_sent flag).
     """
     global _t1_email_sent
     if _t1_email_sent:
         return
     try:
-        from .stock_report import send_email
+        from .postmaster import send_email
         send_email(
-            subject="NennerEngine: Please open Nenner_DataCenter.xlsm",
-            html_body=(
-                "<p>NennerEngine tried to read T1 live prices but the workbook "
-                "is not open in Excel.</p>"
-                f"<p>Please open: <b>{T1_WORKBOOK}</b></p>"
-                "<p>T1 price fetching is disabled for this session. "
-                "Restart the engine after opening the workbook to re-enable "
-                "live prices.</p>"
-            ),
+            "NennerEngine: Please open Nenner_DataCenter.xlsm",
+            "<p>NennerEngine tried to read T1 live prices but the workbook "
+            "is not open in Excel.</p>"
+            f"<p>Please open: <b>{T1_WORKBOOK}</b></p>"
+            "<p>T1 price fetching is disabled for this session. "
+            "Restart the engine after opening the workbook to re-enable "
+            "live prices.</p>",
         )
         _t1_email_sent = True
         log.info("Sent email notification: T1 workbook not open")

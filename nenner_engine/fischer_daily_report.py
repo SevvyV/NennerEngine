@@ -1157,18 +1157,38 @@ def _assemble_sections(
 
 
 def _send_to_subscribers(conn: sqlite3.Connection, subject: str, html: str):
-    """Send the same scan HTML to all active Fischer subscribers."""
+    """Send the same scan HTML to all active Fischer subscribers.
+
+    Uses SendDeduplicator (S5) to prevent duplicate sends if the scan
+    fires more than once for the same slot.
+    """
     try:
         from .fischer_subscribers import get_all_active_subscribers
         from .postmaster import send_email as _send
 
+        # Get dedup guard if reliability layer is active
+        dedup = None
+        try:
+            from .fischer_reliability import FischerReliability, SendDeduplicator
+            rel = FischerReliability.get_instance()
+            if rel:
+                dedup = rel.dedup
+        except ImportError:
+            pass
+
         subscribers = get_all_active_subscribers(conn)
         for sub in subscribers:
+            email = sub["email"]
             try:
-                _send(subject, html, to_addr=sub["email"])
-                log.info(f"Fischer scan sent to subscriber {sub['email']}")
+                if dedup:
+                    job_id = SendDeduplicator.make_job_id(email)
+                    if not dedup.check_and_mark(email, subject, job_id):
+                        log.info(f"Fischer scan dedup: skipping {email} (already sent)")
+                        continue
+                _send(subject, html, to_addr=email)
+                log.info(f"Fischer scan sent to subscriber {email}")
             except Exception as e:
-                log.error(f"Fischer scan send to {sub['email']} failed: {e}")
+                log.error(f"Fischer scan send to {email} failed: {e}")
     except Exception as e:
         log.error(f"Fischer subscriber distribution failed: {e}", exc_info=True)
 
