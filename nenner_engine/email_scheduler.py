@@ -6,7 +6,6 @@ Background thread that automatically checks for new Nenner emails:
   2. Every day at 8:00 AM Eastern Time
   3. Optionally on a recurring interval (e.g. every N minutes)
   4. Detects new trade initiations (direction changes) and sends Telegram alerts
-  5. Sends daily "Top 10 Trades" report at configured times (9:00 AM, 10:30 AM ET)
 
 Thread-safe: uses its own SQLite connection per check cycle.
 """
@@ -34,9 +33,6 @@ INTERVAL_WINDOW_END = 11    # 11:00 AM ET (exclusive -- last check fires <=10:30
 
 # How often the scheduler thread wakes up to see if it's time (seconds)
 _TICK_INTERVAL = 30
-
-# Daily Top 10 Trades report times (hour, minute) in Eastern Time
-DAILY_REPORT_TIMES = [(9, 0), (10, 30)]
 
 # Auto-cancel: run after market close to catch breached cancel levels
 AUTO_CANCEL_HOUR = 16       # 4:30 PM ET
@@ -180,45 +176,6 @@ def _send_trade_alerts(changes: list[dict], db_path: str):
 
 
 # ---------------------------------------------------------------------------
-# Daily Top 10 Trades Report
-# ---------------------------------------------------------------------------
-
-def _send_daily_top_trades(db_path: str):
-    """Build and send the daily Top 10 Trades report via Telegram.
-
-    Opens its own DB connection, calls build_top_trades_message(), sends.
-    """
-    try:
-        from .alerts import get_telegram_config, send_telegram, AlertConfig
-        from .trade_stats import build_top_trades_message
-        from .db import init_db, migrate_db
-
-        config = AlertConfig()
-        if not config.ENABLE_TELEGRAM:
-            return
-
-        token, chat_id = get_telegram_config()
-        if not token or not chat_id:
-            log.warning("Daily report: Telegram not configured, skipping")
-            return
-
-        conn = init_db(db_path)
-        migrate_db(conn)
-
-        msg = build_top_trades_message(conn, limit=10)
-        conn.close()
-
-        if msg:
-            send_telegram(msg, token, chat_id)
-            log.info("Daily Top 10 Trades report sent via Telegram")
-        else:
-            log.info("Daily Top 10 report: insufficient data, skipped")
-
-    except Exception as e:
-        log.error(f"Daily Top 10 report failed: {e}", exc_info=True)
-
-
-# ---------------------------------------------------------------------------
 # Auto-Cancel (breached cancel levels)
 # ---------------------------------------------------------------------------
 
@@ -274,11 +231,6 @@ def _send_fischer_scan_report(db_path: str, slot: str):
             send_scan_report(db_path, slot=slot)
     except Exception as e:
         log.error(f"Fischer {slot} report failed: {e}", exc_info=True)
-
-
-def _send_fischer_daily_report(db_path: str):
-    """Legacy wrapper — runs opening scan."""
-    _send_fischer_scan_report(db_path, "opening")
 
 
 def _run_fischer_settlement(db_path: str):
@@ -465,10 +417,7 @@ def run_email_check(db_path: str) -> dict:
 # ---------------------------------------------------------------------------
 
 class EmailScheduler:
-    """Background thread that checks for Nenner emails on startup and daily at 8 AM ET.
-
-    Also sends daily Top 10 Trades reports at configured times (9:00 AM, 10:30 AM ET).
-    """
+    """Background thread that checks for Nenner emails on startup and daily at 8 AM ET."""
 
     def __init__(self, db_path: str, check_on_start: bool = True,
                  daily_check: bool = True, interval_minutes: Optional[int] = None,
@@ -495,8 +444,6 @@ class EmailScheduler:
         self._last_result: Optional[dict] = None
         self._lock = threading.Lock()
 
-        # Track daily report sends: set of "YYYY-MM-DD_HH:MM" keys
-        self._sent_reports: set[str] = set()
         # Track auto-cancel: date string of last run
         self._last_auto_cancel_date: Optional[str] = None
         # Track stock report: date string of last send
@@ -530,22 +477,6 @@ class EmailScheduler:
         result["trigger"] = reason
         self._set_result(result)
         return result
-
-    def _check_daily_reports(self, now_et: datetime):
-        """Check if it's time to send a daily Top 10 Trades report.
-
-        Fires at each configured time in DAILY_REPORT_TIMES, once per day per slot.
-        """
-        for report_hour, report_minute in DAILY_REPORT_TIMES:
-            # 5-minute tolerance window
-            if (now_et.hour == report_hour
-                    and report_minute <= now_et.minute < report_minute + 5):
-                report_key = f"{now_et.strftime('%Y-%m-%d')}_{report_hour:02d}:{report_minute:02d}"
-                if report_key not in self._sent_reports:
-                    self._sent_reports.add(report_key)
-                    log.info(f"Email scheduler: sending daily Top 10 report "
-                             f"({report_hour}:{report_minute:02d} ET)")
-                    _send_daily_top_trades(self.db_path)
 
     def _check_stock_report(self, now_et: datetime):
         """Check if it's time to send Stanley's Daily Stock Report (once per day)."""
@@ -583,7 +514,7 @@ class EmailScheduler:
             return  # skip weekends
         h, m = now_et.hour, now_et.minute
         market_open = (h > 9 or (h == 9 and m >= 30))
-        market_closed = (h >= 16)
+        market_closed = (h > 16 or (h == 16 and m >= 30))
         if not market_open or market_closed:
             return
 
@@ -734,9 +665,6 @@ class EmailScheduler:
                                     f"interval_{self.interval_minutes}m "
                                     f"({now_et.strftime('%H:%M')} ET)"
                                 )
-
-                # Daily Top 10 Trades report (independent of email check)
-                self._check_daily_reports(now_et)
 
                 # Stanley's Daily Stock Report: 7:00 AM ET weekdays
                 self._check_stock_report(now_et)

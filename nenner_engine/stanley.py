@@ -465,8 +465,8 @@ def generate_morning_brief(
     if send_telegram_flag:
         from .alerts import AlertConfig
         config = AlertConfig()
-        if not config.ENABLE_TELEGRAM:
-            log.info("Stanley brief: Telegram disabled in AlertConfig, skipping send")
+        if not config.ENABLE_STANLEY_BRIEF:
+            log.info("Stanley brief: ENABLE_STANLEY_BRIEF is False, skipping Telegram send")
         else:
             try:
                 token, chat_id = get_telegram_config()
@@ -481,6 +481,20 @@ def generate_morning_brief(
                     log.warning("Stanley: Telegram not configured")
             except Exception as e:
                 log.error(f"Stanley Telegram send failed: {e}")
+
+    # 8. Send via email
+    try:
+        from .postmaster import markdown_to_html, send_email as _send_email
+        html_brief = markdown_to_html(brief)
+        today_str = datetime.now().strftime("%b %d, %Y")
+        _send_email(
+            f"Stanley Morning Brief — {today_str}",
+            html_brief,
+            to_addr="sevagv@vartaniancapital.com",
+        )
+        log.info("Stanley brief sent via email")
+    except Exception as e:
+        log.error(f"Stanley email send failed: {e}", exc_info=True)
 
     return brief
 

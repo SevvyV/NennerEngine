@@ -51,17 +51,19 @@ class AlertConfig:
 
     # --- Channel Enable/Disable ---
     ENABLE_TOAST = False         # Windows toast notifications (with audio) -- DISABLED
-    ENABLE_TELEGRAM = False      # Telegram bot notifications -- DISABLED (improvement planned)
+    ENABLE_TELEGRAM = True       # Telegram bot notifications
+    ENABLE_STANLEY_BRIEF = False # Stanley morning brief via Telegram -- DISABLED
     ENABLE_PROXIMITY_ALERTS = False  # Price proximity alerts (CANCEL_DANGER/WATCH) -- DISABLED
+    ENABLE_SIGNAL_CHANGE_ALERTS = False  # Signal direction change alerts -- DISABLED
 
     # --- Scheduled Summary Alerts ---
     # Full portfolio summary sent via Telegram at these times (24hr format).
     # These fire regardless of ticker filters.
     SCHEDULED_ALERT_TIMES = [
-        dt_time(8, 0),           # 8:00 AM  -- pre-market overview
-        dt_time(9, 35),          # 9:35 AM  -- 5 min after US open
-        dt_time(12, 0),          # 12:00 PM -- midday check
-        dt_time(16, 15),         # 4:15 PM  -- post-close summary
+        # dt_time(8, 0),           # 8:00 AM  -- pre-market overview
+        # dt_time(9, 35),          # 9:35 AM  -- 5 min after US open
+        # dt_time(12, 0),          # 12:00 PM -- midday check
+        # dt_time(16, 15),         # 4:15 PM  -- post-close summary
     ]
 
     # Tolerance window: scheduled alert fires if current time is within
@@ -201,6 +203,19 @@ def send_toast(title: str, message: str, severity: str = "INFO") -> bool:
         return False
 
 
+def notify_fischer_refresh(sender_email: str) -> bool:
+    """Send a Telegram alert when a Fischer Refresh email is received.
+
+    Returns True if sent, False if Telegram is not configured or send failed.
+    """
+    token, chat_id = get_telegram_config()
+    if not token or not chat_id:
+        log.debug("Fischer refresh notification skipped — Telegram not configured")
+        return False
+    msg = f"<b>Fischer Refresh</b>\n{sender_email} requested a refresh of the Fischer Daily Report"
+    return send_telegram(msg, token, chat_id)
+
+
 def send_telegram(message: str, bot_token: str, chat_id: str) -> bool:
     """Send a Telegram message via Bot API (HTTP POST, stdlib only).
 
@@ -289,6 +304,69 @@ def evaluate_price_alerts(rows: list[dict]) -> list[dict]:
         # REMOVED: TRIGGER_DANGER and TRIGGER_WATCH alerts are no longer useful
         # because average gains per trade are too close to trigger levels.
         # Cancel proximity alerts are retained as they indicate risk of reversal.
+
+    return alerts
+
+
+def evaluate_custom_price_alerts(conn: sqlite3.Connection,
+                                  price_by_ticker: dict[str, float]) -> list[dict]:
+    """Check custom price alerts against current prices.
+
+    Fires once per direction (above/below), then marks fired so it won't
+    re-fire until the alert is reset or a new one is created.
+    """
+    alerts = []
+    rows = conn.execute(
+        "SELECT * FROM custom_price_alerts WHERE active = 1"
+    ).fetchall()
+
+    for row in rows:
+        ticker = row["ticker"]
+        price = price_by_ticker.get(ticker)
+        if price is None:
+            continue
+
+        above = row["above"]
+        below = row["below"]
+        note = row["note"] or ""
+
+        # Check above threshold
+        if above and price >= above and not row["fired_above"]:
+            alerts.append({
+                "ticker": ticker,
+                "instrument": ticker,
+                "alert_type": "CUSTOM_ABOVE",
+                "severity": "DANGER",
+                "message": (f"\U0001f6a8 {ticker} hit ${price:,.2f} — "
+                            f"ABOVE ${above:,.2f} threshold\n{note}"),
+                "current_price": price,
+                "cancel_dist_pct": None,
+                "trigger_dist_pct": None,
+                "effective_signal": None,
+            })
+            conn.execute(
+                "UPDATE custom_price_alerts SET fired_above = 1 WHERE id = ?",
+                (row["id"],))
+            conn.commit()
+
+        # Check below threshold
+        if below and price <= below and not row["fired_below"]:
+            alerts.append({
+                "ticker": ticker,
+                "instrument": ticker,
+                "alert_type": "CUSTOM_BELOW",
+                "severity": "DANGER",
+                "message": (f"\U0001f6a8 {ticker} hit ${price:,.2f} — "
+                            f"BELOW ${below:,.2f} threshold\n{note}"),
+                "current_price": price,
+                "cancel_dist_pct": None,
+                "trigger_dist_pct": None,
+                "effective_signal": None,
+            })
+            conn.execute(
+                "UPDATE custom_price_alerts SET fired_below = 1 WHERE id = ?",
+                (row["id"],))
+            conn.commit()
 
     return alerts
 
@@ -760,6 +838,7 @@ def run_monitor(conn: sqlite3.Connection, interval: int = 60,
     check_count = 0
     total_alerts = 0
     auto_cancel_ran_today = None  # Track date of last auto-cancel run
+    custom_alert_reset_date = None  # Track date of last daily fired-flag reset
 
     while not shutdown:
         try:
@@ -846,13 +925,34 @@ def run_monitor(conn: sqlite3.Connection, interval: int = 60,
                         log.debug(f"Suppressed intraday alert for {ticker} "
                                   f"(not in intraday filter)")
 
-            # 4. Signal state change alerts (ALWAYS sent for ALL tickers)
-            signal_alerts, last_signal_id = detect_signal_changes(
-                conn, last_signal_id
-            )
+            # 4. Custom price alerts (above/below thresholds)
+            # Reset fired flags once per calendar day so alerts re-arm
+            today_iso = now.date().isoformat()
+            if custom_alert_reset_date != today_iso:
+                conn.execute(
+                    "UPDATE custom_price_alerts "
+                    "SET fired_above = 0, fired_below = 0 "
+                    "WHERE active = 1"
+                )
+                conn.commit()
+                custom_alert_reset_date = today_iso
+                log.info("Custom price alerts reset for new trading day")
 
-            # 5. Enrich alerts with position P/L for held instruments
-            all_alerts = filtered_price_alerts + signal_alerts
+            price_by_ticker = {
+                r["ticker"]: r.get("price")
+                for r in rows if r.get("price")
+            }
+            custom_alerts = evaluate_custom_price_alerts(conn, price_by_ticker)
+
+            # 5. Signal state change alerts
+            signal_alerts = []
+            if config.ENABLE_SIGNAL_CHANGE_ALERTS:
+                signal_alerts, last_signal_id = detect_signal_changes(
+                    conn, last_signal_id
+                )
+
+            # 6. Enrich alerts with position P/L for held instruments
+            all_alerts = filtered_price_alerts + custom_alerts + signal_alerts
             try:
                 from .positions import (
                     read_positions, compute_position_pnl, get_held_tickers,
@@ -860,10 +960,6 @@ def run_monitor(conn: sqlite3.Connection, interval: int = 60,
                 positions = read_positions()
                 held = get_held_tickers(positions)
                 if held:
-                    price_by_ticker = {
-                        r["ticker"]: r.get("price")
-                        for r in rows if r.get("price")
-                    }
                     for alert in all_alerts:
                         tk = alert.get("ticker")
                         if tk in held:
@@ -881,7 +977,7 @@ def run_monitor(conn: sqlite3.Connection, interval: int = 60,
             except Exception as e:
                 log.debug(f"Position enrichment skipped: {e}")
 
-            # 6. Dispatch alerts
+            # 7. Dispatch alerts
             fired = 0
             for alert in all_alerts:
                 if dispatch_alert(alert, cooldown_tracker, conn,

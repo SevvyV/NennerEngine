@@ -1173,11 +1173,17 @@ def _send_to_subscribers(conn: sqlite3.Connection, subject: str, html: str):
         log.error(f"Fischer subscriber distribution failed: {e}", exc_info=True)
 
 
-def send_scan_report(db_path: str, slot: ScanSlot = "opening"):
+def send_scan_report(db_path: str, slot: ScanSlot = "opening",
+                     send_emails: bool = True):
     """Generate unified Fischer report: 4 sections, one email.
 
     Scans all 17 tickers for both intents at both DTE ranges,
     assembles sections with macro selection, and sends a single email.
+
+    Args:
+        db_path: Path to nenner_signals.db
+        slot: Scan slot (opening/midday/closing)
+        send_emails: If False, scan and commit to DB only (no email delivery)
 
     Opens its own DB connection. Safe to call from scheduler thread.
     """
@@ -1194,7 +1200,7 @@ def send_scan_report(db_path: str, slot: ScanSlot = "opening"):
     except ImportError:
         pass
 
-    if rel and rel.cache:
+    if send_emails and rel and rel.cache:
         today_str = date.today().isoformat()
         cache_key = f"scan_{slot}"
         cached = rel.cache.get(cache_key, today_str)
@@ -1219,7 +1225,8 @@ def send_scan_report(db_path: str, slot: ScanSlot = "opening"):
 
         if not all_results:
             log.warning(f"Fischer {slot}: no results — all tickers failed")
-            _send_offline_alert(send_email, config)
+            if send_emails:
+                _send_offline_alert(send_email, config)
             return
 
         # Scan guard: abort if too many tickers failed
@@ -1230,21 +1237,23 @@ def send_scan_report(db_path: str, slot: ScanSlot = "opening"):
         # Phase 2: Assemble 4 sections with macro selection
         sections_data = _assemble_sections(all_results)
 
-        # Phase 3: Build and send single email
+        # Phase 3: Build report (and optionally send email)
         html = _build_unified_email(sections_data, failed_tickers, config.label)
         today_fmt = date.today().strftime('%b %d')
         subject = f"Fischer Daily Scan \u2014 {config.label} \u2014 {today_fmt}"
-        send_email(subject, html, to_addr=REPORT_TO)
 
-        # Phase 4: Send to active subscribers
-        _send_to_subscribers(conn, subject, html)
+        if send_emails:
+            send_email(subject, html, to_addr=REPORT_TO)
+            # Phase 4: Send to active subscribers
+            _send_to_subscribers(conn, subject, html)
 
         # Store in cache
         if rel and rel.cache:
             rel.cache.put(f"scan_{slot}", date.today().isoformat(), html)
 
         total_recs = sum(len(recs) for recs in sections_data.values())
-        log.info(f"Fischer {slot}: unified report sent ({total_recs} recs across 4 sections)")
+        action = "sent" if send_emails else "committed to DB (no email)"
+        log.info(f"Fischer {slot}: unified report {action} ({total_recs} recs across 4 sections)")
 
     except Exception as e:
         log.error(f"Fischer {slot} report failed: {e}", exc_info=True)
@@ -1252,10 +1261,6 @@ def send_scan_report(db_path: str, slot: ScanSlot = "opening"):
         if conn:
             conn.close()
 
-
-def send_daily_report(db_path: str):
-    """Legacy entry point — runs the opening scan."""
-    send_scan_report(db_path, slot="opening")
 
 
 
