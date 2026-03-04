@@ -8,6 +8,7 @@ __pycache__/
 .claude/
 .launcher_pids
 performance_reports/
+logs/
 _backups/
 nul
 *.lnk
