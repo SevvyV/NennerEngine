@@ -15,15 +15,9 @@ import time
 from datetime import datetime
 from typing import Optional
 
+from .config import LLM_MODEL, LLM_MAX_TOKENS_STANLEY, LLM_RETRY_ATTEMPTS, REPORT_RECIPIENT
+
 log = logging.getLogger("nenner")
-
-# ---------------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------------
-
-STANLEY_MODEL = "claude-sonnet-4-5-20250929"
-STANLEY_MAX_TOKENS = 4096
-BRIEF_RETRY_ATTEMPTS = 2
 
 
 # ---------------------------------------------------------------------------
@@ -350,7 +344,7 @@ def _build_stanley_system_prompt(
 def _call_stanley_llm(system_prompt: str,
                       user_message: str,
                       api_key: str,
-                      model: str = STANLEY_MODEL) -> str:
+                      model: str = LLM_MODEL) -> str:
     """Call the Anthropic API for Stanley's interpretation.
 
     Returns HTML-formatted brief text, or fallback error message.
@@ -360,11 +354,11 @@ def _call_stanley_llm(system_prompt: str,
     client = anthropic.Anthropic(api_key=api_key)
 
     last_error = None
-    for attempt in range(BRIEF_RETRY_ATTEMPTS + 1):
+    for attempt in range(LLM_RETRY_ATTEMPTS + 1):
         try:
             message = client.messages.create(
                 model=model,
-                max_tokens=STANLEY_MAX_TOKENS,
+                max_tokens=LLM_MAX_TOKENS_STANLEY,
                 system=[{
                     "type": "text",
                     "text": system_prompt,
@@ -387,13 +381,13 @@ def _call_stanley_llm(system_prompt: str,
 
         except Exception as e:
             last_error = e
-            if attempt < BRIEF_RETRY_ATTEMPTS:
+            if attempt < LLM_RETRY_ATTEMPTS:
                 wait = 2 ** (attempt + 1)
                 log.warning(f"Stanley LLM error (attempt {attempt + 1}), "
                             f"retrying in {wait}s: {e}")
                 time.sleep(wait)
             else:
-                log.error(f"Stanley LLM failed after {BRIEF_RETRY_ATTEMPTS + 1} "
+                log.error(f"Stanley LLM failed after {LLM_RETRY_ATTEMPTS + 1} "
                           f"attempts: {e}")
 
     return f"<b>Stanley Brief</b>\n\nFailed to generate brief: {last_error}"
@@ -417,7 +411,7 @@ def generate_morning_brief(
     This is the primary integration point called from email_scheduler.py.
     """
     from .llm_parser import _get_cached_api_key
-    from .alerts import get_telegram_config, send_telegram
+    from .alert_dispatch import get_telegram_config, send_telegram
 
     try:
         api_key = _get_cached_api_key()
@@ -490,7 +484,7 @@ def generate_morning_brief(
         _send_email(
             f"Stanley Morning Brief — {today_str}",
             html_brief,
-            to_addr="sevagv@vartaniancapital.com",
+            to_addr=REPORT_RECIPIENT,
         )
         log.info("Stanley brief sent via email")
     except Exception as e:

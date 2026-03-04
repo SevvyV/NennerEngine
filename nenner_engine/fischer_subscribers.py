@@ -291,7 +291,8 @@ def _poll_refresh_raw(db_path: str) -> int:
     from email.utils import parseaddr
 
     from .db import init_db
-    from .imap_client import get_credentials, IMAP_SERVER
+    from .config import IMAP_SERVER
+    from .imap_client import get_credentials
 
     gmail_addr, gmail_pass = get_credentials()
 
@@ -366,7 +367,7 @@ def _process_refresh_email(imap, conn: sqlite3.Connection,
 
     # Telegram notification — fire for every Refresh email received
     try:
-        from .alerts import notify_fischer_refresh
+        from .alert_dispatch import notify_fischer_refresh
         notify_fischer_refresh(sender_email)
     except Exception as e:
         log.debug(f"Fischer refresh Telegram notify failed: {e}")

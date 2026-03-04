@@ -17,38 +17,18 @@ import time
 from datetime import datetime, timedelta
 from typing import Optional
 
+from .config import (
+    DAILY_CHECK_HOUR, DAILY_CHECK_MINUTE,
+    INTERVAL_WINDOW_START, INTERVAL_WINDOW_END,
+    STOCK_REPORT_HOUR, STOCK_REPORT_MINUTE,
+    AUTO_CANCEL_HOUR, AUTO_CANCEL_MINUTE,
+    FISCHER_SCAN_SCHEDULE, SCHEDULER_TICK_SECONDS,
+)
+
 log = logging.getLogger("nenner")
 
-# ---------------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------------
-
-DAILY_CHECK_HOUR = 8       # 8:00 AM
-DAILY_CHECK_MINUTE = 0     # :00
+# Only used locally — not shared
 DAILY_CHECK_TZ = "US/Eastern"
-
-# Interval check window (Eastern Time) -- only check during these hours
-INTERVAL_WINDOW_START = 8   # 8:00 AM ET
-INTERVAL_WINDOW_END = 11    # 11:00 AM ET (exclusive -- last check fires <=10:30)
-
-# How often the scheduler thread wakes up to see if it's time (seconds)
-_TICK_INTERVAL = 30
-
-# Auto-cancel: run after market close to catch breached cancel levels
-AUTO_CANCEL_HOUR = 16       # 4:30 PM ET
-AUTO_CANCEL_MINUTE = 30
-
-# Stanley's Daily Stock Report: sent once daily pre-market
-STOCK_REPORT_HOUR = 7       # 7:00 AM ET
-STOCK_REPORT_MINUTE = 0
-
-# Fischer scan schedule: (hour, minute, slot_name)
-# Two daily scans: opening and closing (midday disabled for now)
-FISCHER_SCAN_SCHEDULE: list[tuple[int, int, str]] = [
-    (9, 45, "opening"),
-    # (12, 0, "midday"),
-    (15, 45, "closing"),
-]
 
 
 # ---------------------------------------------------------------------------
@@ -143,7 +123,8 @@ def _send_trade_alerts(changes: list[dict], db_path: str):
         return
 
     try:
-        from .alerts import get_telegram_config, send_telegram, AlertConfig
+        from .alert_dispatch import get_telegram_config, send_telegram
+        from .alerts import AlertConfig
         config = AlertConfig()
         if not config.ENABLE_TELEGRAM:
             return
@@ -686,7 +667,7 @@ class EmailScheduler:
                 self._reliability.record_health_tick()
 
             # Sleep in small increments for responsive shutdown
-            self._stop_event.wait(timeout=_TICK_INTERVAL)
+            self._stop_event.wait(timeout=SCHEDULER_TICK_SECONDS)
 
     def start(self):
         """Start the scheduler background thread."""
