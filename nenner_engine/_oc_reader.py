@@ -1,20 +1,19 @@
 """
-Subprocess helper — reads ALL 17 put+call chains from OptionChains.xlsm in one pass.
+Subprocess helper — reads all 15 put chains from OptionChains_Beta.xlsm in one pass.
 =====================================================================================
 Called by fischer_chain.read_all_chains() via subprocess.run() with a hard timeout.
 This isolates the COM interaction so it can be killed if Excel hangs.
 
 Unlike _xl_reader.py (which reads one ticker at a time from Options_RT and must
-switch tickers), this reads the pre-populated PutChains and CallChains sheets
-where all 17 tickers already have live RTD bid/ask data.  No ticker switching,
-no sleep, no recalc.
+switch tickers), this reads the pre-populated PutChains sheet where all 15 tickers
+already have live RTD bid/ask data.  No ticker switching, no sleep, no recalc.
 
-OptionChains.xlsm layout (built by build_option_chains.py):
-    Sheets: "PutChains" (puts) and "CallChains" (calls) — identical layout
+OptionChains_Beta.xlsm layout (built by build_option_chains.py):
+    Sheet: "PutChains" (CallChains removed — Fischer v2 is covered puts only)
     Row 2:  4 expiry dates at cols B(2), G(7), L(12), Q(17) — 1-based
     Row 3:  Rate at B3
-    Row 5+: 17 ticker blocks, 14 rows apart (13 data + 1 spacer)
-    Per block: header row (ticker/spot/increment), col-header row, 11 data rows
+    Row 5+: 15 ticker blocks, 10 rows apart (9 data + 1 spacer)
+    Per block: header row (ticker/spot/increment), col-header row, 7 data rows
     4 column sets: A-D, F-I, K-N, P-S  (Strike | RIC | Bid | Ask)
 
 Usage:
@@ -37,13 +36,13 @@ import sys
 # OptionChains layout constants (must match build_option_chains.py)
 # ---------------------------------------------------------------------------
 BLOCK_START_ROW = 5       # first ticker block
-ROWS_PER_BLOCK = 13       # 1 header + 1 col header + 11 data
-BLOCK_SPACING = 14        # 13 + 1 spacer row between blocks
-STRIKES_PER_TICKER = 11
+ROWS_PER_BLOCK = 9        # 1 header + 1 col header + 7 data
+BLOCK_SPACING = 10        # 9 + 1 spacer row between blocks
+STRIKES_PER_TICKER = 7
 
 TICKERS = [
     "AAPL", "AMZN", "AVGO", "GOOGL", "IWM", "META", "MSFT", "NVDA",
-    "QQQ", "TSLA", "GLD", "IBIT", "SLV", "SPY", "TLT", "UNG", "USO",
+    "QQQ", "TSLA", "GLD", "MSTR", "SLV", "UNG", "USO",
 ]
 
 # 4 column sets — 1-based column indices (matching build_option_chains.py)
@@ -191,7 +190,7 @@ def _read_sheet(wb, sheet_name, opt_type, expiries):
 # Main
 # ---------------------------------------------------------------------------
 def main():
-    workbook_name = sys.argv[1] if len(sys.argv) > 1 else "OptionChains.xlsm"
+    workbook_name = sys.argv[1] if len(sys.argv) > 1 else "OptionChains_Beta.xlsm"
     out_path = sys.argv[2] if len(sys.argv) > 2 else None
 
     try:
@@ -227,18 +226,17 @@ def main():
         rate_val = ws_header.range((RATE_CELL[0], RATE_CELL[1])).value
         rate = float(rate_val) if rate_val else 0.045
 
-        # --- Read both sheets ---
+        # --- Read PutChains only (Fischer v2 = covered puts only) ---
         puts, failed_puts = _read_sheet(wb, "PutChains", "P", expiries)
-        calls, failed_calls = _read_sheet(wb, "CallChains", "C", expiries)
 
         _output({
             "ok": True,
             "rate": rate,
             "expiries": expiries,
             "puts": puts,
-            "calls": calls,
+            "calls": {},
             "failed_puts": failed_puts,
-            "failed_calls": failed_calls,
+            "failed_calls": [],
         }, out_path)
 
     except Exception as e:

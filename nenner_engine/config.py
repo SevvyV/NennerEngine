@@ -33,6 +33,5 @@ STOCK_REPORT_HOUR, STOCK_REPORT_MINUTE = 7, 0
 AUTO_CANCEL_HOUR, AUTO_CANCEL_MINUTE = 16, 30
 FISCHER_SCAN_SCHEDULE: list[tuple[int, int, str]] = [
     (9, 45, "opening"),
-    (15, 45, "closing"),
 ]
 SCHEDULER_TICK_SECONDS = 30

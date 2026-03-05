@@ -480,7 +480,7 @@ class MarketHoursGuard:
     ETF_TICKERS = frozenset({
         "GLD", "SLV", "SPY", "QQQ", "TLT", "IWM", "DIA",
         "USO", "UNG", "CORN", "SOYB", "WEAT", "FXE", "UUP",
-        "GBTC", "IBIT", "ETHE", "BITO", "GDXJ", "NEM", "SIL",
+        "GBTC", "MSTR", "ETHE", "BITO", "GDXJ", "NEM", "SIL",
     })
 
     def __init__(self):

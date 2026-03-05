@@ -48,7 +48,7 @@ ETF_TO_NENNER: dict[str, str] = {
     "GBTC": "BTC",
     "ETHE": "ETH",
     "BITO": "BTC",
-    "IBIT": "BTC",
+    "MSTR": "BTC",
     "UDN": "DXY",   # inverse dollar — same signal, opposite direction
     "GDXJ": "GC",   # gold miners proxy to gold
     "NEM": "GC",

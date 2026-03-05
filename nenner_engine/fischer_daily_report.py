@@ -16,6 +16,7 @@ Uses the same Fischer engine pipeline (read_chain → IV → compute_ev → rank
 and the existing Gmail SMTP infrastructure from stock_report.py.
 """
 
+import hashlib
 import logging
 import sqlite3
 from dataclasses import dataclass
@@ -24,9 +25,9 @@ from typing import Optional
 
 from .config import REPORT_RECIPIENT
 from .fischer_scanner import (
-    ALWAYS_TICKERS, MACRO_POOL, SCAN_TICKERS, CAPITAL, TOP_N,
+    SCAN_TICKERS, CAPITAL, TOP_PICKS,
     ScanSlot, ScanSlotConfig, SCAN_SLOTS,
-    scan_ticker, select_best_candidate, select_macro_tickers,
+    scan_ticker, select_best_candidate, select_top_trades,
     assemble_sections, calc_shares, get_rules,
 )
 
@@ -449,61 +450,136 @@ def _sort_recs(recs: list[dict], display_order: tuple[str, ...] | None = None) -
     return sorted(recs, key=_total_max_profit, reverse=True)
 
 
-def _build_section(
-    recs: list[dict],
-    weekly_recs: list[dict] | None,
-    section_title: str,
-    entry_note: str,
-    strike_label: str,
-    intent: str,
-    show_conviction: bool = True,
-    display_order: tuple[str, ...] | None = None,
-) -> str:
-    """Build HTML for one intent section (short-term + weekly tables)."""
-    header = _table_header(show_conviction, intent=intent)
-    sorted_recs = _sort_recs(recs, display_order)
-    rows_html = "".join(_build_rec_row(r, show_conviction) for r in sorted_recs)
+# ---------------------------------------------------------------------------
+# Single-Instrument Drill-Down Report
+# ---------------------------------------------------------------------------
 
-    weekly_section = ""
-    if weekly_recs:
-        sorted_weekly = _sort_recs(weekly_recs, display_order)
-        weekly_rows_html = "".join(_build_rec_row(r, show_conviction) for r in sorted_weekly)
-        if weekly_rows_html:
-            weekly_section = f"""
-    <h3 style="color:{_CLR_HEADER}; font-size:16px; margin:14px 0 4px 0;">
-      Weekly Expiry (7&ndash;14 DTE)</h3>
-    <div style="overflow-x:auto;">
-    <table style="width:100%; border-collapse:collapse; font-size:13px;
-                  color:{_CLR_TEXT};">
-      {header}
-      <tbody>
-        {weekly_rows_html}
-      </tbody>
-    </table>
+def build_instrument_drilldown(
+    ticker: str,
+    ev_results: list,
+    spot: float,
+    intent: str = "covered_put",
+) -> str:
+    """Build HTML report showing all strikes for one instrument.
+
+    Shows how risk/reward changes across every strike in the chain,
+    grouped by expiry. Designed for subscriber "Refresh TSLA" requests.
+
+    Parameters
+    ----------
+    ticker : instrument ticker (e.g. "TSLA")
+    ev_results : list of EVResult objects from scan_ticker() — ALL strikes,
+                 not just the best one
+    spot : current spot price
+    intent : "covered_put" or "covered_call"
+    """
+    from itertools import groupby
+
+    is_put = intent == "covered_put"
+    today = date.today()
+    shares = calc_shares(spot)
+    action = "Covered Put" if is_put else "Covered Call"
+    assign_label = "if Assigned" if is_put else "if Called"
+
+    # Group by expiry, sort strikes within each group
+    ev_results = sorted(ev_results, key=lambda e: (e.expiry, e.strike))
+
+    sections_html = ""
+    for expiry, group in groupby(ev_results, key=lambda e: e.expiry):
+        strikes = list(group)
+        dte = (expiry - today).days
+        exp_fmt = _format_expiry(str(expiry))
+
+        rows_html = ""
+        for ev in strikes:
+            if is_put:
+                intrinsic = max(0, ev.strike - spot)
+                dir_ps = spot - ev.strike
+            else:
+                intrinsic = max(0, spot - ev.strike)
+                dir_ps = ev.strike - spot
+            extrinsic = ev.bid - intrinsic
+            max_prof_ps = dir_ps + ev.bid
+            max_prof_d = max_prof_ps * shares
+            prem_d = ev.bid * shares
+            theta_d = extrinsic * shares
+            dir_d = dir_ps * shares
+            pwin_pct = ev.p_profit * 100
+            potm_pct = ev.p_expire_worthless * 100
+
+            rows_html += f"""
+            <tr style="border-bottom:1px solid {_CLR_BORDER};">
+                <td style="padding:8px 10px; font-weight:600;">${ev.strike:.2f}</td>
+                <td style="padding:8px 10px;">${ev.bid:.2f}</td>
+                <td style="padding:8px 10px;">{potm_pct:.1f}%</td>
+                <td style="padding:8px 10px;">{pwin_pct:.1f}%</td>
+                <td style="padding:8px 10px;">${prem_d:,.0f}</td>
+                <td style="padding:8px 10px;">${theta_d:,.0f}</td>
+                <td style="padding:8px 10px;">${dir_d:,.0f}</td>
+                <td style="padding:8px 10px; font-weight:700; color:{_CLR_GREEN};">
+                    ${max_prof_d:,.0f}</td>
+                <td style="padding:8px 10px;">{ev.delta:+.3f}</td>
+                <td style="padding:8px 10px;">{ev.iv * 100:.1f}%</td>
+            </tr>"""
+
+        if sections_html:
+            sections_html += (
+                f'<hr style="border:none; border-top:1px solid {_CLR_BORDER};'
+                f' margin:16px 0 8px 0;">'
+            )
+
+        sections_html += f"""
+        <h3 style="color:{_CLR_HEADER}; font-size:16px; margin:12px 0 4px 0;">
+          {exp_fmt} &mdash; {dte} DTE</h3>
+        <div style="overflow-x:auto;">
+        <table style="width:100%; border-collapse:collapse; font-size:13px;
+                      color:{_CLR_TEXT};">
+          <thead>
+            <tr style="background:{_CLR_ROW_ALT}; border-bottom:2px solid {_CLR_BORDER};">
+              <th style="padding:8px 10px; text-align:left;">Strike</th>
+              <th style="padding:8px 10px; text-align:left;">Bid</th>
+              <th style="padding:8px 10px; text-align:left;">P(OTM)</th>
+              <th style="padding:8px 10px; text-align:left;">P(Win)</th>
+              <th style="padding:8px 10px; text-align:left;">Premium $</th>
+              <th style="padding:8px 10px; text-align:left;">Theta $</th>
+              <th style="padding:8px 10px; text-align:left;">Dir $</th>
+              <th style="padding:8px 10px; text-align:left;">Max Profit<br>{assign_label}</th>
+              <th style="padding:8px 10px; text-align:left;">Delta</th>
+              <th style="padding:8px 10px; text-align:left;">IV</th>
+            </tr>
+          </thead>
+          <tbody>{rows_html}</tbody>
+        </table>
+        </div>"""
+
+    # Summary header
+    summary = f"""
+    <div style="margin-bottom:12px; font-size:14px; color:{_CLR_TEXT}; line-height:1.8;">
+      <strong>Spot:</strong> ${spot:.2f} &nbsp;|&nbsp;
+      <strong>Shares:</strong> {shares:,} &nbsp;|&nbsp;
+      <strong>Strategy:</strong> {action}
     </div>"""
 
-    return f"""
-    <h2 style="color:{_CLR_HEADER}; font-size:18px; margin:20px 0 4px 0;">
-      {section_title}</h2>
-    <p style="color:{_CLR_MUTED}; font-size:12px; margin:0 0 6px 0;">
-      {entry_note} | Strike = {strike_label} strike |
-      P(Win) band: {get_rules(intent)["min_p_win"]:.1%} &ndash; {get_rules(intent)["max_p_win"]:.0%}
-    </p>
+    legend = f"""
+    <div style="margin-top:16px; padding:14px 20px; font-size:13px;
+                color:{_CLR_TEXT}; line-height:1.6;">
+      <strong style="font-size:14px;">Legend</strong><br>
+      <strong>Premium $</strong> = bid &times; shares (total premium collected) &nbsp;|&nbsp;
+      <strong>Theta $</strong> = extrinsic value &times; shares (time-decay income)<br>
+      <strong>Dir $</strong> = directional profit if assigned &nbsp;|&nbsp;
+      <strong>Max Profit</strong> = theta + directional combined<br>
+      <strong>P(OTM)</strong> = probability option expires worthless &nbsp;|&nbsp;
+      <strong>P(Win)</strong> = probability of profit at expiry
+    </div>"""
 
-    <h3 style="color:{_CLR_HEADER}; font-size:16px; margin:8px 0 4px 0;">
-      Short-Term Expiry (0&ndash;8 DTE)</h3>
-    <div style="overflow-x:auto;">
-    <table style="width:100%; border-collapse:collapse; font-size:13px;
-                  color:{_CLR_TEXT};">
-      {header}
-      <tbody>
-        {rows_html}
-      </tbody>
-    </table>
-    </div>
-
-    {weekly_section}"""
-
+    return _wrap_fischer_document(
+        body_html=f"{summary}{sections_html}",
+        title=f"{ticker} {action} Analysis",
+        subtitle=f"Strike Drill-Down &mdash; {today.strftime('%B %d, %Y')}",
+        footer_text="Generated by Fischer Options Engine",
+        notes_html=legend,
+        max_width=960,
+    )
 
 
 def _build_unified_email(
@@ -678,7 +754,7 @@ def _send_offline_alert(send_email, config: ScanSlotConfig):
         footer_text="Generated by Fischer Options Engine",
         max_width=600,
     )
-    send_email(subject, body, to_addr=REPORT_RECIPIENT)
+    send_email(subject, body, to_addr=REPORT_RECIPIENT, from_name="Fischer")
     log.warning("Fischer: sent DataCenter offline alert")
 
 
@@ -693,7 +769,7 @@ def _scan_all_tickers(
     results : dict keyed by (ticker, intent, dte_label) -> rec dict
     failed  : list of tickers where no chain data was available
     """
-    # Phase 0: bulk pre-load put + call chains from OptionChains.xlsm
+    # Phase 0: bulk pre-load put + call chains from OptionChains_Beta.xlsm
     from .fischer_chain import read_all_chains
     bulk_put_chains: dict = {}
     bulk_call_chains: dict = {}
@@ -803,11 +879,16 @@ def _scan_all_tickers(
     return results, list(failed)
 
 
-def _send_to_subscribers(conn: sqlite3.Connection, subject: str, html: str):
+def _send_to_subscribers(conn: sqlite3.Connection, subject: str, html: str,
+                         dedup_key: str | None = None):
     """Send the same scan HTML to all active Fischer subscribers.
 
     Uses SendDeduplicator (S5) to prevent duplicate sends if the scan
     fires more than once for the same slot.
+
+    Args:
+        dedup_key: Stable key (e.g. "2026-03-04_opening") used for dedup.
+                   If None, dedup is skipped.
     """
     try:
         from .fischer_subscribers import get_all_active_subscribers
@@ -816,7 +897,7 @@ def _send_to_subscribers(conn: sqlite3.Connection, subject: str, html: str):
         # Get dedup guard if reliability layer is active
         dedup = None
         try:
-            from .fischer_reliability import FischerReliability, SendDeduplicator
+            from .fischer_reliability import FischerReliability
             rel = FischerReliability.get_instance()
             if rel:
                 dedup = rel.dedup
@@ -827,12 +908,14 @@ def _send_to_subscribers(conn: sqlite3.Connection, subject: str, html: str):
         for sub in subscribers:
             email = sub["email"]
             try:
-                if dedup:
-                    job_id = SendDeduplicator.make_job_id(email)
+                if dedup and dedup_key:
+                    job_id = hashlib.sha256(
+                        f"{email.lower()}|{dedup_key}".encode()
+                    ).hexdigest()[:12]
                     if not dedup.check_and_mark(email, subject, job_id):
                         log.info(f"Fischer scan dedup: skipping {email} (already sent)")
                         continue
-                _send(subject, html, to_addr=email)
+                _send(subject, html, to_addr=email, from_name="Fischer")
                 log.info(f"Fischer scan sent to subscriber {email}")
             except Exception as e:
                 log.error(f"Fischer scan send to {email} failed: {e}")
@@ -874,11 +957,26 @@ def send_scan_report(db_path: str, slot: ScanSlot = "opening",
         if cached:
             log.info(f"Fischer {slot}: serving from cache")
             today_fmt = date.today().strftime('%b %d')
-            subject = f"Fischer Daily Scan \u2014 {config.label} \u2014 {today_fmt}"
-            send_email(subject, cached.result_html, to_addr=REPORT_RECIPIENT)
+            time_fmt = datetime.now().strftime('%I:%M %p').lstrip('0')
+            subject = f"Fischer Daily Scan \u2014 {time_fmt} \u2014 {today_fmt}"
+            # Dedup admin copy using stable date+slot key
+            dedup_key = f"{today_str}_{slot}"
+            admin_sent = True
+            if rel.dedup:
+                admin_job = hashlib.sha256(
+                    f"{REPORT_RECIPIENT.lower()}|{dedup_key}".encode()
+                ).hexdigest()[:12]
+                if not rel.dedup.check_and_mark(
+                        REPORT_RECIPIENT, subject, admin_job):
+                    log.info(f"Fischer {slot}: admin copy dedup, skipping")
+                    admin_sent = False
+            if admin_sent:
+                send_email(subject, cached.result_html,
+                           to_addr=REPORT_RECIPIENT, from_name="Fischer")
             from .db import init_db
             cache_conn = init_db(db_path)
-            _send_to_subscribers(cache_conn, subject, cached.result_html)
+            _send_to_subscribers(cache_conn, subject, cached.result_html,
+                                 dedup_key=dedup_key)
             cache_conn.close()
             return
 
@@ -907,12 +1005,14 @@ def send_scan_report(db_path: str, slot: ScanSlot = "opening",
         # Phase 3: Build report (and optionally send email)
         html = _build_unified_email(sections_data, failed_tickers, config.label)
         today_fmt = date.today().strftime('%b %d')
-        subject = f"Fischer Daily Scan \u2014 {config.label} \u2014 {today_fmt}"
+        time_fmt = datetime.now().strftime('%I:%M %p').lstrip('0')
+        subject = f"Fischer Daily Scan \u2014 {time_fmt} \u2014 {today_fmt}"
 
         if send_emails:
-            send_email(subject, html, to_addr=REPORT_RECIPIENT)
+            send_email(subject, html, to_addr=REPORT_RECIPIENT, from_name="Fischer")
             # Phase 4: Send to active subscribers
-            _send_to_subscribers(conn, subject, html)
+            dedup_key = f"{date.today().isoformat()}_{slot}"
+            _send_to_subscribers(conn, subject, html, dedup_key=dedup_key)
 
         # Store in cache
         if rel and rel.cache:
@@ -993,7 +1093,7 @@ def _generate_with_ticker_tracking(
 
     # Rank across tickers by max profit per share
     all_candidates.sort(key=lambda t: t[1].max_profit_per_share, reverse=True)
-    top = all_candidates[:TOP_N]
+    top = all_candidates[:TOP_PICKS]
 
     # Store in DB
     recs = []
@@ -1233,9 +1333,9 @@ def generate_fresh_scan(
             })
         return recs, failed
 
-    # Short-term puts and calls
-    put_recs, put_failed = _scan_intent("covered_put")
-    call_recs, call_failed = _scan_intent("covered_call")
+    # Short-term puts and calls (0-7 DTE, matching REPORT_SECTIONS[0])
+    put_recs, put_failed = _scan_intent("covered_put", dte_range=(0, 7))
+    call_recs, call_failed = _scan_intent("covered_call", dte_range=(0, 7))
 
     # Weekly 7-14 DTE puts and calls (no DB storage — pass conn=None)
     put_weekly, pw_failed = _generate_weekly_recs(
@@ -1268,7 +1368,7 @@ def send_settlement_report(db_path: str):
 
         html = _build_settlement_email(settlements)
         subject = f"Fischer Settlement: {len(settlements)} trades — {date.today().strftime('%b %d')}"
-        send_email(subject, html, to_addr=REPORT_RECIPIENT)
+        send_email(subject, html, to_addr=REPORT_RECIPIENT, from_name="Fischer")
         log.info(f"Fischer settlement report sent to {REPORT_RECIPIENT}")
 
     except Exception as e:

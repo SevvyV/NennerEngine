@@ -187,7 +187,7 @@ def _cleanup(path: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Bulk reader — reads ALL 17 put+call chains from OptionChains.xlsm in one pass
+# Bulk reader — reads all 15 put chains from OptionChains_Beta.xlsm in one pass
 # ---------------------------------------------------------------------------
 
 _ChainDict = dict[str, tuple[pd.DataFrame, "ChainMeta"]]
@@ -195,13 +195,14 @@ _ChainDict = dict[str, tuple[pd.DataFrame, "ChainMeta"]]
 
 def read_all_chains(
     timeout_seconds: int = 45,
-    workbook_name: str = "OptionChains.xlsm",
+    workbook_name: str = "OptionChains_Beta.xlsm",
 ) -> tuple[_ChainDict, _ChainDict]:
-    """Read all 17 put and call chains from OptionChains.xlsm in a single subprocess.
+    """Read all 15 put chains from OptionChains_Beta.xlsm in a single subprocess.
 
-    Returns (put_chains, call_chains) where each is a dict mapping
-    ticker -> (DataFrame, ChainMeta).  DataFrames have the standard
-    CHAIN_COLUMNS schema.  Does NOT populate _chain_cache.
+    Returns (put_chains, call_chains) where call_chains is always empty
+    (Fischer v2 = covered puts only, CallChains sheet removed).
+    DataFrames have the standard CHAIN_COLUMNS schema.
+    Does NOT populate _chain_cache.
     Returns ({}, {}) on failure (graceful degradation).
     """
     tmp_fd, tmp_path = tempfile.mkstemp(suffix=".json", prefix="fischer_oc_")

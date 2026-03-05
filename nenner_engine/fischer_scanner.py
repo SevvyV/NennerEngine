@@ -22,24 +22,16 @@ log = logging.getLogger("nenner")
 # Unified Ticker Universe (v2)
 # ---------------------------------------------------------------------------
 
-# Always included in every section (10 tickers)
-ALWAYS_TICKERS: tuple[str, ...] = (
-    "AAPL", "AMZN", "AVGO", "GOOGL",
+# All tickers compete equally — top 10 selected by theta/max_profit
+SCAN_TICKERS: list[str] = [
+    "AAPL", "AMZN", "AVGO", "GOOGL", "IWM",
     "META", "MSFT", "NVDA", "QQQ", "TSLA",
-)
+    "GLD", "MSTR", "SLV", "UNG", "USO",
+]
 
-# Macro pool — top 4 selected per section by premium:directional ratio
-MACRO_POOL: tuple[str, ...] = (
-    "GLD", "SLV", "TLT", "UNG", "USO",
-)
-
-MACRO_PICKS = 5
-
-# Flat list of all tickers (used by settlement, scanning, etc.)
-SCAN_TICKERS: list[str] = list(ALWAYS_TICKERS) + list(MACRO_POOL)
+TOP_PICKS = 10
 
 CAPITAL = 500_000
-TOP_N = 99  # show all tickers per group (no limit)
 
 # Filter rules per intent — puts and calls can be tuned independently
 _PUT_RULES = {
@@ -52,7 +44,7 @@ _PUT_RULES = {
 _CALL_RULES = {
     "min_p_win": 0.55,
     "max_p_win": 0.65,
-    "max_p_otm": 0.60,
+    "max_p_otm": 0.575,
     "min_ratio": 0.70,
     "max_ratio": 3.0,
 }
@@ -191,33 +183,34 @@ def calc_shares(spot: float, capital: int = CAPITAL) -> int:
     return max(100, int(round(capital / spot, -2)))
 
 
-def select_macro_tickers(
-    macro_results: dict[str, dict],
-    n: int = MACRO_PICKS,
-    intent: str = "covered_put",
-) -> list[str]:
-    """Rank macro pool tickers by premium_ratio quality, return top N.
+def select_top_trades(
+    all_recs: list[dict],
+    n: int = TOP_PICKS,
+) -> list[dict]:
+    """Rank all candidates by extrinsic_value/max_profit ascending, return top N.
 
-    Filters to ratio within [min_ratio, max_ratio] and P(Win) >= min_p_win.
-    If fewer than N qualify, returns all that qualify.
+    Lower ratio = more directional profit relative to theta proceeds.
+    Trades with zero or missing max_profit are excluded.
     """
-    R = get_rules(intent)
     eligible = []
-    for ticker, rec in macro_results.items():
-        ratio = rec.get("premium_ratio")
-        if ratio is None:
+    for rec in all_recs:
+        bid = rec.get("bid", 0) or rec.get("premium_per_share", 0)
+        strike = rec.get("strike", 0)
+        spot = rec.get("spot_at_recommend", 0)
+        max_prof = rec.get("max_profit_per_share", 0)
+        if max_prof <= 0 or bid <= 0:
             continue
-        if not (R["min_ratio"] <= ratio <= R["max_ratio"]):
+        intrinsic = max(0, strike - spot)  # put intrinsic
+        extrinsic = bid - intrinsic
+        if extrinsic <= 0:
             continue
-        if rec.get("p_win", 0) < R["min_p_win"]:
-            continue
-        # Prefer ratios near 2:1 (center of band) — lower distance = better
-        dist_from_center = abs(ratio - 2.0)
-        eligible.append((ticker, rec, dist_from_center))
+        ratio = extrinsic / max_prof
+        rec["_rank_ratio"] = round(ratio, 4)
+        eligible.append((ratio, rec))
 
-    # Sort: closest to 2:1 center first, then by max_profit as tiebreaker
-    eligible.sort(key=lambda t: (t[2], -t[1].get("max_profit_per_share", 0)))
-    return [t[0] for t in eligible[:n]]
+    # Sort ascending: smallest extrinsic/max_profit first (most directional)
+    eligible.sort(key=lambda t: t[0])
+    return [t[1] for t in eligible[:n]]
 
 
 def scan_ticker(
@@ -386,37 +379,27 @@ def assemble_sections(
     all_results: dict,
     report_sections,
 ) -> dict:
-    """For each report section, pick always + best macro tickers.
+    """For each report section, rank all tickers by theta/max_profit, pick top 10.
 
     Parameters
     ----------
     all_results : dict keyed by (ticker, intent, dte_label) -> rec dict
     report_sections : tuple of ReportSection instances
 
-    Returns dict keyed by ReportSection -> list of rec dicts (up to 15).
+    Returns dict keyed by ReportSection -> list of rec dicts (up to TOP_PICKS).
     """
     sections_data = {}
     for section in report_sections:
         intent = section.intent
         dte_label = f"{section.dte_range[0]}-{section.dte_range[1]}"
 
-        # Always tickers (10)
-        always_recs = []
-        for t in ALWAYS_TICKERS:
+        # Collect all tickers that have results for this section
+        candidates = []
+        for t in SCAN_TICKERS:
             key = (t, intent, dte_label)
             if key in all_results:
-                always_recs.append(all_results[key])
+                candidates.append(all_results[key])
 
-        # Macro selection (7 → pick 5)
-        macro_candidates = {}
-        for t in MACRO_POOL:
-            key = (t, intent, dte_label)
-            if key in all_results:
-                macro_candidates[t] = all_results[key]
-
-        selected_macro = select_macro_tickers(macro_candidates, intent=intent)
-        macro_recs = [macro_candidates[t] for t in selected_macro]
-
-        sections_data[section] = always_recs + macro_recs
+        sections_data[section] = select_top_trades(candidates)
 
     return sections_data

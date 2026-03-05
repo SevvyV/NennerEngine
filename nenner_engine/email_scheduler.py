@@ -126,7 +126,7 @@ def _send_trade_alerts(changes: list[dict], db_path: str):
         from .alert_dispatch import get_telegram_config, send_telegram
         from .alerts import AlertConfig
         config = AlertConfig()
-        if not config.ENABLE_TELEGRAM:
+        if not config.ENABLE_TELEGRAM or not config.ENABLE_SIGNAL_CHANGE_ALERTS:
             return
 
         token, chat_id = get_telegram_config()
@@ -289,14 +289,19 @@ def _run_auto_cancel_catchup(db_path: str):
 # Core check function
 # ---------------------------------------------------------------------------
 
-def run_email_check(db_path: str) -> dict:
+def run_email_check(db_path: str,
+                    skip_brief_for_email_id: int | None = None) -> dict:
     """Run an incremental email check using its own DB connection.
 
     Also detects direction changes (new trades) and sends Telegram alerts.
 
+    Args:
+        skip_brief_for_email_id: If set, skip Stanley brief generation for
+            this email_id (already sent in a previous run).
+
     Returns a summary dict:
         {"new_emails": int, "error": str|None, "timestamp": str,
-         "trade_changes": list[dict]}
+         "trade_changes": list[dict], "brief_email_id": int|None}
     """
     from .db import init_db, migrate_db, compute_current_state
     from .imap_client import check_new_emails
@@ -354,30 +359,35 @@ def run_email_check(db_path: str) -> dict:
                     email_id = latest_email["id"]
                     raw_text = latest_email["raw_text"]
 
-                    sigs = conn.execute(
-                        "SELECT * FROM signals WHERE email_id = ?", (email_id,)
-                    ).fetchall()
-                    cycs = conn.execute(
-                        "SELECT * FROM cycles WHERE email_id = ?", (email_id,)
-                    ).fetchall()
-                    tgts = conn.execute(
-                        "SELECT * FROM price_targets WHERE email_id = ?", (email_id,)
-                    ).fetchall()
+                    # Skip if we already sent a brief for this email
+                    if email_id == skip_brief_for_email_id:
+                        log.info(f"Stanley brief dedup: skipping email_id={email_id} (already sent)")
+                    else:
+                        sigs = conn.execute(
+                            "SELECT * FROM signals WHERE email_id = ?", (email_id,)
+                        ).fetchall()
+                        cycs = conn.execute(
+                            "SELECT * FROM cycles WHERE email_id = ?", (email_id,)
+                        ).fetchall()
+                        tgts = conn.execute(
+                            "SELECT * FROM price_targets WHERE email_id = ?", (email_id,)
+                        ).fetchall()
 
-                    parsed_signals = {
-                        "signals": [dict(s) for s in sigs],
-                        "cycles": [dict(c) for c in cycs],
-                        "price_targets": [dict(t) for t in tgts],
-                    }
+                        parsed_signals = {
+                            "signals": [dict(s) for s in sigs],
+                            "cycles": [dict(c) for c in cycs],
+                            "price_targets": [dict(t) for t in tgts],
+                        }
 
-                    generate_morning_brief(
-                        conn=conn,
-                        raw_email_text=raw_text,
-                        parsed_signals=parsed_signals,
-                        changes=changes,
-                        db_path=db_path,
-                        email_id=email_id,
-                    )
+                        generate_morning_brief(
+                            conn=conn,
+                            raw_email_text=raw_text,
+                            parsed_signals=parsed_signals,
+                            changes=changes,
+                            db_path=db_path,
+                            email_id=email_id,
+                        )
+                        result["brief_email_id"] = email_id
             except Exception as e:
                 log.error(f"Stanley brief generation failed: {e}", exc_info=True)
         else:
@@ -433,6 +443,8 @@ class EmailScheduler:
         self._fischer_sent_slots: set[str] = set()
         # Track Fischer refresh polling: last poll time
         self._last_refresh_poll: Optional[datetime] = None
+        # Track Stanley brief: email_id of last brief sent
+        self._last_stanley_brief_email_id: Optional[int] = None
 
         # Reliability layer (initialized lazily)
         self._reliability = None
@@ -454,7 +466,13 @@ class EmailScheduler:
     def _do_check(self, reason: str) -> dict:
         """Execute an email check and store the result."""
         log.info(f"Email scheduler: triggered ({reason})")
-        result = run_email_check(self.db_path)
+        result = run_email_check(
+            self.db_path,
+            skip_brief_for_email_id=self._last_stanley_brief_email_id,
+        )
+        # Track the email_id we just sent a brief for
+        if result.get("brief_email_id"):
+            self._last_stanley_brief_email_id = result["brief_email_id"]
         result["trigger"] = reason
         self._set_result(result)
         return result

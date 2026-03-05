@@ -137,6 +137,47 @@ def _match_subscriber_by_subject(conn: sqlite3.Connection,
     return None
 
 
+
+def _generate_and_send_drilldown(subscriber: dict, ticker: str,
+                                  original_subject: str):
+    """Generate a single-instrument drill-down report and email it."""
+    from datetime import date as _date
+    from .fischer_daily_report import build_instrument_drilldown
+    from .fischer_scanner import scan_ticker
+    from .fischer_chain import read_all_chains
+    from .postmaster import send_email
+
+    log.info(f"Fischer drilldown: scanning {ticker} for {subscriber['email']}")
+
+    # Bulk read put chains from OptionChains_Beta.xlsm
+    put_chains, _ = read_all_chains(
+        workbook_name="OptionChains_Beta.xlsm"
+    )
+
+    # Scan puts (Fischer v2 = covered puts only)
+    chain_data = put_chains.get(ticker)
+    put_results = scan_ticker(
+        ticker, dte_range=(0, 14), intent="covered_put",
+        chain_data=chain_data,
+    ) if chain_data else []
+
+    if not put_results:
+        log.info(f"Fischer drilldown: no results for {ticker}, skipping")
+        return
+
+    spot = put_results[0].spot
+
+    html = build_instrument_drilldown(
+        ticker, put_results, spot, intent="covered_put",
+    )
+
+    today_fmt = _date.today().strftime("%b %d")
+    now_str = datetime.now().strftime("%I:%M %p")
+    email_subject = (f"Fischer {ticker} Analysis \u2014 {now_str} \u2014 {today_fmt}")
+    send_email(email_subject, html, to_addr=subscriber["email"], from_name="Fischer")
+    log.info(f"Fischer drilldown: sent {ticker} to {subscriber['email']}")
+
+
 def get_all_active_subscribers(conn: sqlite3.Connection) -> list[dict]:
     """Return all active subscribers joined with their portfolio data."""
     rows = conn.execute(
@@ -307,26 +348,39 @@ def _poll_refresh_raw(db_path: str) -> int:
 
     try:
         imap.select("INBOX")
-        status, data = imap.search(None, '(UNSEEN SUBJECT "Refresh")')
-        if status != "OK" or not data[0]:
-            return 0
-
-        msg_ids = data[0].split()
-        log.info(f"Fischer refresh: found {len(msg_ids)} unseen 'Refresh' email(s)")
-
         conn = init_db(db_path)
         try:
-            for msg_id in msg_ids:
-                try:
-                    processed += _process_refresh_email(
-                        imap, conn, msg_id, db_path
-                    )
-                except Exception as e:
-                    log.error(f"Fischer refresh: error processing msg {msg_id}: {e}",
-                              exc_info=True)
-                finally:
-                    # Always mark as SEEN to avoid reprocessing
-                    imap.store(msg_id, "+FLAGS", "\\Seen")
+            # 1. Poll for "Refresh" emails (full portfolio scan)
+            status, data = imap.search(None, '(UNSEEN SUBJECT "Refresh")')
+            if status == "OK" and data[0]:
+                msg_ids = data[0].split()
+                log.info(f"Fischer refresh: found {len(msg_ids)} unseen 'Refresh' email(s)")
+                for msg_id in msg_ids:
+                    try:
+                        processed += _process_refresh_email(
+                            imap, conn, msg_id, db_path
+                        )
+                    except Exception as e:
+                        log.error(f"Fischer refresh: error processing msg {msg_id}: {e}",
+                                  exc_info=True)
+                    finally:
+                        imap.store(msg_id, "+FLAGS", "\\Seen")
+
+            # 2. Poll for "Fischer" emails (single-ticker drill-down)
+            status, data = imap.search(None, '(UNSEEN SUBJECT "Fischer")')
+            if status == "OK" and data[0]:
+                msg_ids = data[0].split()
+                log.info(f"Fischer drilldown: found {len(msg_ids)} unseen 'Fischer' email(s)")
+                for msg_id in msg_ids:
+                    try:
+                        processed += _process_drilldown_email(
+                            imap, conn, msg_id, db_path
+                        )
+                    except Exception as e:
+                        log.error(f"Fischer drilldown: error processing msg {msg_id}: {e}",
+                                  exc_info=True)
+                    finally:
+                        imap.store(msg_id, "+FLAGS", "\\Seen")
         finally:
             conn.close()
     except Exception as e:
@@ -422,14 +476,14 @@ def _process_refresh_email(imap, conn: sqlite3.Connection,
                         subtitle="Request Deferred",
                     )
                     send_email(f"Fischer — Request Deferred to {defer_str}",
-                               body, to_addr=sender_email)
+                               body, to_addr=sender_email, from_name="Fischer")
                 except Exception as e:
                     log.error(f"Fischer refresh: deferred reply failed: {e}")
                 return 0
     except ImportError:
         pass
 
-    # 4. Load portfolio
+    # 4. Load portfolio (full portfolio refresh)
     portfolio = get_portfolio(conn, portfolio_name)
     if not portfolio:
         log.error(f"Fischer refresh: portfolio '{portfolio_name}' not found")
@@ -437,7 +491,7 @@ def _process_refresh_email(imap, conn: sqlite3.Connection,
                      f"Portfolio '{portfolio_name}' not found")
         return 0
 
-    # 5. Generate fresh scan and send
+    # 6. Generate fresh scan and send
     try:
         _generate_and_send_refresh(subscriber, portfolio, subject)
         _log_refresh(conn, subscriber["id"], subject, portfolio_name, "completed")
@@ -506,8 +560,123 @@ def _generate_and_send_refresh(subscriber: dict, portfolio: dict,
 
     today_fmt = _date.today().strftime('%b %d')
     email_subject = f"Fischer Daily Scan \u2014 {slot_label} \u2014 {today_fmt}"
-    send_email(email_subject, html, to_addr=subscriber["email"])
+    send_email(email_subject, html, to_addr=subscriber["email"], from_name="Fischer")
     log.info(f"Fischer refresh: sent to {subscriber['email']}")
+
+
+# ---------------------------------------------------------------------------
+# Drill-Down Email Processing
+# ---------------------------------------------------------------------------
+
+def _process_drilldown_email(imap, conn: sqlite3.Connection,
+                              msg_id: bytes, db_path: str) -> int:
+    """Process a 'Fischer TSLA' drill-down request. Returns 1 on success, 0 on skip."""
+    from email import policy
+    from email.parser import BytesParser
+    from email.utils import parseaddr
+    from .fischer_scanner import SCAN_TICKERS
+
+    status, msg_data = imap.fetch(msg_id, "(RFC822)")
+    if status != "OK":
+        log.warning(f"Fischer drilldown: failed to fetch msg {msg_id}")
+        return 0
+
+    raw_email = msg_data[0][1]
+    msg = BytesParser(policy=policy.default).parsebytes(raw_email)
+    sender_name, sender_email = parseaddr(msg.get("From", ""))
+    sender_email = sender_email.strip().lower()
+    subject = msg.get("Subject", "").strip()
+
+    log.info(f"Fischer drilldown: processing from={sender_email} subject='{subject}'")
+
+    # Telegram notification
+    try:
+        from .alert_dispatch import notify_fischer_refresh
+        notify_fischer_refresh(sender_email)
+    except Exception:
+        pass
+
+    # 1. Extract ticker from subject: "Fischer TSLA" → "TSLA"
+    parts = subject.upper().split()
+    if len(parts) < 2 or parts[0] != "FISCHER":
+        log.info(f"Fischer drilldown: subject '{subject}' not in 'Fischer TICKER' format")
+        return 0
+
+    ticker = parts[1]
+    if not ticker.isalpha() or len(ticker) > 5:
+        log.info(f"Fischer drilldown: '{ticker}' doesn't look like a ticker")
+        return 0
+
+    # 2. Identify subscriber by sender email
+    subscriber = get_subscriber_by_email(conn, sender_email)
+    if not subscriber:
+        log.info(f"Fischer drilldown: {sender_email} is not a subscriber, skipping")
+        return 0
+
+    # 3. Verify ticker is in subscriber's portfolio or global universe
+    portfolio = get_portfolio(conn, subscriber["portfolio_name"])
+    portfolio_tickers = portfolio["tickers"] if portfolio else ()
+    if ticker not in portfolio_tickers and ticker not in SCAN_TICKERS:
+        log.info(f"Fischer drilldown: {ticker} not in universe for {sender_email}")
+        return 0
+
+    # 4. Rate limit (shares the same counter as Refresh)
+    allowed, used = check_rate_limit(
+        conn, subscriber["id"], subscriber["max_daily_refreshes"]
+    )
+    if not allowed:
+        log.info(f"Fischer drilldown: {sender_email} rate-limited "
+                 f"({used}/{subscriber['max_daily_refreshes']} today)")
+        _log_refresh(conn, subscriber["id"], subject,
+                     subscriber["portfolio_name"], "rate_limited")
+        return 0
+
+    # 5. Market hours check
+    try:
+        from .fischer_reliability import FischerReliability
+        rel = FischerReliability.get_instance()
+        if rel and rel.market_hours:
+            check = rel.market_hours.check_request()
+            if not check["allowed"]:
+                defer_str = (check["defer_until"].strftime("%I:%M %p ET %a")
+                             if check["defer_until"] else "next open")
+                log.info(f"Fischer drilldown: deferred for {sender_email} — "
+                         f"{check['reason']}")
+                _log_refresh(conn, subscriber["id"], subject,
+                             subscriber["portfolio_name"], "deferred",
+                             f"Market closed — deferred to {defer_str}")
+                try:
+                    from .postmaster import send_email, wrap_document
+                    body = wrap_document(
+                        f'<p style="font-size:14px;">Your Fischer drill-down request '
+                        f'for <strong>{ticker}</strong> has been received but the market '
+                        f'is currently closed.</p>'
+                        f'<p style="font-size:14px;">Your report will be processed at '
+                        f'<strong>{defer_str}</strong>.</p>',
+                        title="Fischer Options",
+                        subtitle="Request Deferred",
+                    )
+                    send_email(f"Fischer — Request Deferred to {defer_str}",
+                               body, to_addr=sender_email, from_name="Fischer")
+                except Exception as e:
+                    log.error(f"Fischer drilldown: deferred reply failed: {e}")
+                return 0
+    except ImportError:
+        pass
+
+    # 6. Generate and send drill-down
+    try:
+        _generate_and_send_drilldown(subscriber, ticker, subject)
+        _log_refresh(conn, subscriber["id"], subject,
+                     subscriber["portfolio_name"], "completed",
+                     f"drilldown:{ticker}")
+        return 1
+    except Exception as e:
+        log.error(f"Fischer drilldown: failed for {sender_email}/{ticker}: {e}",
+                  exc_info=True)
+        _log_refresh(conn, subscriber["id"], subject,
+                     subscriber["portfolio_name"], "error", str(e))
+        return 0
 
 
 # ---------------------------------------------------------------------------

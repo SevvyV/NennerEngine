@@ -60,22 +60,34 @@ if ($loginReady) {
 
     $wsh.SendKeys("{ENTER}")
 
-    Log "T1: Sign-in keys sent. Waiting 90s for RTD server to connect..."
+    Log "T1: Sign-in keys sent. Waiting 15 min for T1 to fully connect..."
 } else {
     Log "T1: WARNING -- login window not detected after 60s. Sign in manually."
 }
 
-Start-Sleep -Seconds 90
+# Wait 15 minutes for T1 to fully initialize and RTD server to connect
+Start-Sleep -Seconds 900
+
+# Verify T1 is actually running before opening spreadsheets
 $t1Check = Get-Process -Name "LSEG ONE" -ErrorAction SilentlyContinue
 if ($t1Check) {
     Log "T1: Confirmed running (PID $($t1Check.Id))"
 } else {
-    Log "T1: WARNING -- process not found after launch. Check manually."
+    Log "T1: WARNING -- process not found after 15 min wait. Attempting relaunch..."
+    Start-Process -FilePath $t1Exe
+    Start-Sleep -Seconds 60
+
+    $t1Check2 = Get-Process -Name "LSEG ONE" -ErrorAction SilentlyContinue
+    if ($t1Check2) {
+        Log "T1: Relaunch successful (PID $($t1Check2.Id)). Sign in manually."
+    } else {
+        Log "T1: FAILED -- could not start T1. Continuing with spreadsheets anyway."
+    }
 }
 
 # --- 2. Excel Workbooks (fresh restart for clean RTD) ---
 $dcPath = "E:\Workspace\DataCenter\Nenner_DataCenter.xlsm"
-$ocPath = "E:\Workspace\DataCenter\OptionChains.xlsm"
+$ocPath = "E:\Workspace\DataCenter\OptionChains_Beta.xlsm"
 
 $excelWasRunning = $false
 try {
@@ -85,7 +97,7 @@ try {
 
     # Save any of our workbooks that are open
     foreach ($wb in $xl.Workbooks) {
-        if ($wb.Name -eq "Nenner_DataCenter.xlsm" -or $wb.Name -eq "OptionChains.xlsm") {
+        if ($wb.Name -eq "Nenner_DataCenter.xlsm" -or $wb.Name -eq "OptionChains_Beta.xlsm") {
             Log "Excel: Saving $($wb.Name)..."
             $wb.Save()
         }
@@ -124,9 +136,11 @@ Start-Sleep -Seconds 15
 
 Log "Excel: Opening OptionChains.xlsm..."
 Start-Process -FilePath $ocPath
-Start-Sleep -Seconds 10
+Start-Sleep -Seconds 15
 
-Log "Excel: Both workbooks launched. RTD will populate once T1 connects."
+Log "Excel: Both workbooks launched. Waiting 30s for workbooks to fully load..."
+Start-Sleep -Seconds 30
+Log "Excel: RTD should be populating now."
 
 # --- 3. RTD Health Check ---
 # After T1 and DataCenter are up, verify RTD is actually feeding prices.

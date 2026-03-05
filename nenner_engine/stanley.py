@@ -10,6 +10,7 @@ Named after Stanley Druckenmiller.
 
 import json
 import logging
+import re
 import sqlite3
 import time
 from datetime import datetime
@@ -211,29 +212,47 @@ not directly change signals.
 ## Cycle Data (changed instruments)
 {cycle_data}
 
-## Output Format
-Produce an HTML-formatted brief for Telegram (use <b>, <i> tags only — \
-no markdown, no <br> tags, use newlines). Structure:
+## Output Format — CRITICAL
+You MUST output plain markdown. NEVER use HTML tags (<b>, <i>, <br>, etc.). \
+Use markdown syntax only: ## for headers, **bold**, *italic*, - for bullets.
 
-1. <b>Stanley's Brief</b> with today's date
-2. <b>Top 3 Things That Matter Today</b> — numbered list of the most \
-important takeaways
-3. <b>Categorized Changes</b>:
-   - Cancelled SELL → now BUY (bullish reversals)
-   - Cancelled BUY → now SELL (bearish reversals)
-   - Active signals updated (cancel level changes, new signals)
-   - Other observations
-4. <b>Per-Instrument Context</b> — for the most significant 3-5 changes, \
-add a line about historical performance (win rate, risk flag) and cycle \
-alignment
-5. <b>Cross-Instrument Observations</b> — correlations, alignments, \
-divergences
-6. End with: "Anything I'm reading wrong? Teach me with --stanley-teach"
+## Stanley's Brief — [today's date]
+
+## Top 3 Things That Matter Today
+Numbered list of the most important takeaways.
+
+## Categorized Changes
+- Cancelled SELL → now BUY (bullish reversals)
+- Cancelled BUY → now SELL (bearish reversals)
+- Active signals updated (cancel level changes, new signals)
+- Other observations
+
+## Per-Instrument Context
+For the most significant 3-5 changes, add a line about historical \
+performance (win rate, risk flag) and cycle alignment.
+
+## Cross-Instrument Observations
+Correlations, alignments, divergences.
+
+End with: "Anything I'm reading wrong? Teach me with --stanley-teach"
 
 Keep the total brief under 3500 characters. Be opinionated but transparent \
 about uncertainty. Use only these emoji: \U0001f7e2 for BUY, \U0001f534 \
 for SELL.
 """
+
+
+def _strip_html_to_markdown(text: str) -> str:
+    """Convert stray HTML tags to markdown equivalents.
+
+    Safety net in case the LLM outputs Telegram-style HTML instead of markdown.
+    """
+    text = re.sub(r"<b>(.*?)</b>", r"**\1**", text)
+    text = re.sub(r"<strong>(.*?)</strong>", r"**\1**", text)
+    text = re.sub(r"<i>(.*?)</i>", r"*\1*", text)
+    text = re.sub(r"<em>(.*?)</em>", r"*\1*", text)
+    text = re.sub(r"<br\s*/?>", "\n", text)
+    return text
 
 
 def _format_knowledge(knowledge: list) -> str:
@@ -479,7 +498,8 @@ def generate_morning_brief(
     # 8. Send via email
     try:
         from .postmaster import markdown_to_html, send_email as _send_email
-        html_brief = markdown_to_html(brief)
+        email_brief = _strip_html_to_markdown(brief)
+        html_brief = markdown_to_html(email_brief)
         today_str = datetime.now().strftime("%b %d, %Y")
         _send_email(
             f"Stanley Morning Brief — {today_str}",

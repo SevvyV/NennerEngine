@@ -298,6 +298,11 @@ def migrate_db(conn: sqlite3.Connection):
                share_alloc = '{"AAPL":1800,"AMZN":2100,"AVGO":2200,"GOOGL":1600,"IWM":2200,"META":700,"MSFT":1200,"NVDA":2800,"QQQ":900,"TSLA":1200,"GLD":1800,"IBIT":9000,"SLV":16000,"SPY":800,"TLT":5500,"UNG":20000,"USO":6000}',
                show_conviction = 1
            WHERE portfolio_name = 'fischer_daily'""",
+        # v14: Replace IBIT with MSTR in default portfolio
+        """UPDATE fischer_portfolios
+           SET tickers = 'AAPL,AMZN,AVGO,GOOGL,IWM,META,MSFT,NVDA,QQQ,TSLA,GLD,MSTR,SLV,SPY,TLT,UNG,USO',
+               share_alloc = '{"AAPL":1800,"AMZN":2100,"AVGO":2200,"GOOGL":1600,"IWM":2200,"META":700,"MSFT":1200,"NVDA":2800,"QQQ":900,"TSLA":1200,"GLD":1800,"MSTR":1400,"SLV":16000,"SPY":800,"TLT":5500,"UNG":20000,"USO":6000}'
+           WHERE portfolio_name = 'fischer_daily'""",
     ]
     for sql in migrations:
         try:
@@ -374,9 +379,9 @@ def _seed_fischer_portfolios(conn: sqlite3.Connection):
         "INSERT INTO fischer_portfolios (portfolio_name, label, tickers, share_alloc, show_conviction) "
         "VALUES (?, ?, ?, ?, ?)",
         ("fischer_daily", "Fischer Daily",
-         "AAPL,AMZN,AVGO,GOOGL,IWM,META,MSFT,NVDA,QQQ,TSLA,GLD,IBIT,SLV,SPY,TLT,UNG,USO",
+         "AAPL,AMZN,AVGO,GOOGL,IWM,META,MSFT,NVDA,QQQ,TSLA,GLD,MSTR,SLV,SPY,TLT,UNG,USO",
          '{"AAPL":1800,"AMZN":2100,"AVGO":2200,"GOOGL":1600,"IWM":2200,"META":700,'
-         '"MSFT":1200,"NVDA":2800,"QQQ":900,"TSLA":1200,"GLD":1800,"IBIT":9000,'
+         '"MSFT":1200,"NVDA":2800,"QQQ":900,"TSLA":1200,"GLD":1800,"MSTR":1400,'
          '"SLV":16000,"SPY":800,"TLT":5500,"UNG":20000,"USO":6000}', 1)
     )
     conn.commit()
@@ -402,6 +407,10 @@ def compute_current_state(conn: sqlite3.Connection):
        cancel_level for the new implied reversal signal (the level at which
        the implied signal would itself be cancelled).
     """
+    # Only rebuild state for tickers still in the instrument map
+    from .instruments import INSTRUMENT_MAP
+    active_tickers = {info["ticker"] for info in INSTRUMENT_MAP.values()}
+
     # Get the latest signal per ticker, using date + id for proper ordering
     rows = conn.execute("""
         SELECT s.id, s.date, s.instrument, s.ticker, s.asset_class,
@@ -417,6 +426,7 @@ def compute_current_state(conn: sqlite3.Connection):
                AND (s.date || '-' || printf('%010d', s.id)) = latest.max_key
         ORDER BY s.ticker
     """).fetchall()
+    rows = [r for r in rows if r["ticker"] in active_tickers]
 
     conn.execute("DELETE FROM current_state")
 
