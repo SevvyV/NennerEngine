@@ -423,20 +423,28 @@ def generate_morning_brief(
     changes: list,
     db_path: str,
     email_id: Optional[int] = None,
-    send_telegram_flag: bool = True,
 ) -> str:
     """Generate and optionally send Stanley's morning brief.
 
     This is the primary integration point called from email_scheduler.py.
     """
     from .llm_parser import _get_cached_api_key
-    from .alert_dispatch import get_telegram_config, send_telegram
 
     try:
         api_key = _get_cached_api_key()
     except ValueError as e:
         log.error(f"Stanley cannot generate brief: {e}")
         return ""
+
+    # 0. DB-level dedup: skip if we already generated a brief for this email
+    if email_id is not None:
+        existing = conn.execute(
+            "SELECT 1 FROM stanley_briefs WHERE email_id = ? LIMIT 1",
+            (email_id,),
+        ).fetchone()
+        if existing:
+            log.info(f"Stanley dedup: brief already exists for email_id={email_id}, skipping")
+            return ""
 
     # 1. Determine which tickers need detailed context
     mentioned_tickers = _extract_mentioned_tickers(changes, parsed_signals)
@@ -474,28 +482,7 @@ def generate_morning_brief(
     except Exception as e:
         log.error(f"Failed to store Stanley brief: {e}")
 
-    # 7. Send via Telegram (respects AlertConfig.ENABLE_TELEGRAM)
-    if send_telegram_flag:
-        from .alerts import AlertConfig
-        config = AlertConfig()
-        if not config.ENABLE_STANLEY_BRIEF:
-            log.info("Stanley brief: ENABLE_STANLEY_BRIEF is False, skipping Telegram send")
-        else:
-            try:
-                token, chat_id = get_telegram_config()
-                if token and chat_id:
-                    if len(brief) > 4096:
-                        brief_to_send = brief[:4080] + "\n\n<i>(truncated)</i>"
-                    else:
-                        brief_to_send = brief
-                    send_telegram(brief_to_send, token, chat_id)
-                    log.info("Stanley brief sent via Telegram")
-                else:
-                    log.warning("Stanley: Telegram not configured")
-            except Exception as e:
-                log.error(f"Stanley Telegram send failed: {e}")
-
-    # 8. Send via email
+    # 7. Send via email
     try:
         from .postmaster import markdown_to_html, send_email as _send_email
         email_brief = _strip_html_to_markdown(brief)
@@ -549,5 +536,4 @@ def generate_brief_on_demand(conn: sqlite3.Connection, db_path: str) -> str:
     return generate_morning_brief(
         conn, raw_text, parsed, changes=[],
         db_path=db_path, email_id=email_id,
-        send_telegram_flag=False,
     )

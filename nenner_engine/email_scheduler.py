@@ -110,52 +110,6 @@ def _detect_direction_changes(before: dict, after: dict) -> list[dict]:
     return changes
 
 
-def _send_trade_alerts(changes: list[dict], db_path: str):
-    """Send Telegram alerts for each direction change (new trade initiated).
-
-    Format:
-        [green/red circle] NEW TRADE: TICKER
-        Instrument Name
-        BUY from 2,850.00 (was SELL)
-        Cancel at 2,800.00
-    """
-    if not changes:
-        return
-
-    try:
-        from .alert_dispatch import get_telegram_config, send_telegram
-        from .alerts import AlertConfig
-        config = AlertConfig()
-        if not config.ENABLE_TELEGRAM or not config.ENABLE_SIGNAL_CHANGE_ALERTS:
-            return
-
-        token, chat_id = get_telegram_config()
-        if not token or not chat_id:
-            log.warning("Trade alerts: Telegram not configured, skipping")
-            return
-
-        for change in changes:
-            emoji = "\U0001f7e2" if change["new_signal"] == "BUY" else "\U0001f534"
-            origin_str = (f"{change['origin_price']:,.2f}"
-                          if change["origin_price"] else "?")
-            cancel_str = (f"{change['cancel_level']:,.2f}"
-                          if change["cancel_level"] else "?")
-            was_str = f"was {change['old_signal']}" if change["old_signal"] != "NEW" else "new instrument"
-
-            msg = (
-                f"{emoji} <b>NEW TRADE: {change['ticker']}</b>\n"
-                f"{change['instrument']}\n"
-                f"<b>{change['new_signal']}</b> from {origin_str} ({was_str})\n"
-                f"Cancel at {cancel_str}"
-            )
-            send_telegram(msg, token, chat_id)
-            log.info(f"Trade alert sent: {change['ticker']} "
-                     f"{change['old_signal']} -> {change['new_signal']}")
-
-    except Exception as e:
-        log.error(f"Trade alert send failed: {e}", exc_info=True)
-
-
 # ---------------------------------------------------------------------------
 # Auto-Cancel (breached cancel levels)
 # ---------------------------------------------------------------------------
@@ -253,12 +207,11 @@ def _run_auto_cancel(db_path: str, date_str: Optional[str] = None):
             log.info(f"Auto-cancel: {len(results)} cancellation(s) on {date_str}")
             compute_current_state(conn)
 
-            # Detect direction changes and send alerts
+            # Detect direction changes (logged only)
             state_after = _snapshot_current_state(conn)
             changes = _detect_direction_changes(state_before, state_after)
             if changes:
                 log.info(f"Auto-cancel: {len(changes)} direction change(s)")
-                _send_trade_alerts(changes, db_path)
         else:
             log.info(f"Auto-cancel: no breaches on {date_str}")
 
@@ -345,7 +298,6 @@ def run_email_check(db_path: str,
 
             if changes:
                 log.info(f"Email scheduler: {len(changes)} direction change(s) detected")
-                _send_trade_alerts(changes, db_path)
 
             # Generate Stanley's interpreted morning brief
             try:

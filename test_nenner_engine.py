@@ -1699,7 +1699,6 @@ class TestStanleyBriefGeneration(unittest.TestCase):
             parsed_signals={"signals": [], "cycles": [], "price_targets": []},
             changes=[],
             db_path=":memory:",
-            send_telegram_flag=False,
         )
         self.assertIn("Stanley", brief)
         mock_llm.assert_called_once()
@@ -1717,34 +1716,11 @@ class TestStanleyBriefGeneration(unittest.TestCase):
             parsed_signals={"signals": [], "cycles": [], "price_targets": []},
             changes=[],
             db_path=":memory:",
-            send_telegram_flag=False,
         )
 
         latest = get_latest_brief(self.conn)
         self.assertIsNotNone(latest)
         self.assertEqual(latest["brief_text"], "<b>Test Brief</b>")
-
-    @patch("nenner_engine.alert_dispatch.send_telegram")
-    @patch("nenner_engine.alert_dispatch.get_telegram_config")
-    @patch("nenner_engine.stanley._call_stanley_llm")
-    @patch("nenner_engine.llm_parser._get_cached_api_key")
-    def test_brief_not_sent_via_telegram(self, mock_key, mock_llm, mock_config, mock_send):
-        """Brief should NOT be sent via Telegram (ENABLE_STANLEY_BRIEF=False)."""
-        mock_key.return_value = "test-key"
-        mock_llm.return_value = "<b>Brief</b>"
-        mock_config.return_value = ("token", "chat_id")
-        mock_send.return_value = True
-
-        generate_morning_brief(
-            conn=self.conn,
-            raw_email_text="Test email",
-            parsed_signals={"signals": [], "cycles": [], "price_targets": []},
-            changes=[],
-            db_path=":memory:",
-            send_telegram_flag=True,
-        )
-
-        mock_send.assert_not_called()
 
     @patch("nenner_engine.stanley._call_stanley_llm")
     @patch("nenner_engine.llm_parser._get_cached_api_key")
@@ -1768,7 +1744,6 @@ class TestStanleyBriefGeneration(unittest.TestCase):
             parsed_signals={"signals": [], "cycles": [], "price_targets": []},
             changes=changes,
             db_path=":memory:",
-            send_telegram_flag=False,
         )
 
         call_args = mock_llm.call_args

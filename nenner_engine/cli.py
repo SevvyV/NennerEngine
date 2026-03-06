@@ -218,17 +218,6 @@ Examples:
         print("\n  ALERT CONFIGURATION")
         print("  " + "=" * 50)
         print(f"  Windows Toast (audio):  {'ENABLED' if cfg.ENABLE_TOAST else 'DISABLED'}")
-        print(f"  Telegram Bot:           {'ENABLED' if cfg.ENABLE_TELEGRAM else 'DISABLED'}")
-        print(f"\n  Scheduled Summary Times:")
-        for t in cfg.SCHEDULED_ALERT_TIMES:
-            print(f"    - {t.strftime('%I:%M %p')}")
-        print(f"  Schedule Tolerance:     {cfg.SCHEDULE_TOLERANCE_MINUTES} minutes")
-        print(f"\n  Intraday Alert Tickers ({len(cfg.INTRADAY_TICKERS)}):")
-        for ticker in sorted(cfg.INTRADAY_TICKERS):
-            print(f"    - {ticker}")
-        print(f"\n  Intraday Asset Classes:")
-        for ac in sorted(cfg.INTRADAY_ASSET_CLASSES):
-            print(f"    - {ac}")
         print()
     elif args.stanley_teach:
         from .stanley import add_knowledge
