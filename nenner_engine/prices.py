@@ -172,11 +172,17 @@ LSEG_RIC_MAP: dict[str, str | None] = {
     "GBTC":     "GBTC",
     "ETHE":     "ETHE",
     "BITO":     "BITO",
-    # Single Stocks
+    # Single Stocks & ETFs
     "AAPL":     "AAPL",
+    "AMZN":     "AMZN",
+    "AVGO":     "AVGO",
     "GOOG":     "GOOG",
+    "GOOGL":    "GOOGL",
     "BAC":      "BAC",
+    "IWM":      "IWM",
+    "META":     "META",
     "MSFT":     "MSFT",
+    "MSTR":     "MSTR",
     "NVDA":     "NVDA",
     "TSLA":     "TSLA",
     "QQQ":      "QQQ",
