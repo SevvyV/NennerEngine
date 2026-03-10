@@ -649,7 +649,7 @@ def _build_unified_email(
       <strong>P(Win)</strong> = probability of profit at expiry<br>
       <strong>Theta($)</strong> = extrinsic (time-decay) income &nbsp;|&nbsp;
       <strong>Dir($)</strong> = directional profit if assigned &nbsp;|&nbsp;
-      <strong>Max Profit</strong> = theta + directional combined (shares &times; max profit/sh)<br>
+      <strong>Max Profit</strong> = theta + directional combined (total dollars)<br>
       <span style="background:{CLR_YELLOW}; padding:1px 5px;">Yellow row</span> = no 0DTE strike in band, deferred to later expiry &nbsp;|&nbsp;
       <span style="background:{CLR_YELLOW}; padding:1px 5px;">Yellow P(Win)</span> = no strike in band, showing closest match
     </div>"""
@@ -686,14 +686,12 @@ def _build_settlement_email(settlements: list[dict]) -> str:
             <td style="padding:10px 12px;">${s['close_price']:.2f}</td>
             <td style="padding:10px 12px;">{status}</td>
             <td style="padding:10px 12px; font-weight:700; color:{pnl_color};">
-                ${s['pnl_per_share']:+.2f}</td>
-            <td style="padding:10px 12px; font-weight:700; color:{pnl_color};">
-                ${s['pnl_total']:+,.2f}</td>
+                ${s['pnl_total']:+,.0f}</td>
         </tr>"""
 
     content = f"""
     <p style="font-size:16px; font-weight:700; color:{total_color};">
-      Net P&amp;L (per contract): ${total_pnl:+,.2f}
+      Net P&amp;L: ${total_pnl:+,.0f}
     </p>
 
     <div style="overflow-x:auto;">
@@ -708,8 +706,7 @@ def _build_settlement_email(settlements: list[dict]) -> str:
           <th style="padding:10px 12px; text-align:left;">Premium</th>
           <th style="padding:10px 12px; text-align:left;">Close</th>
           <th style="padding:10px 12px; text-align:left;">Status</th>
-          <th style="padding:10px 12px; text-align:left;">P&amp;L/sh</th>
-          <th style="padding:10px 12px; text-align:left;">P&amp;L/ct</th>
+          <th style="padding:10px 12px; text-align:right;">Net P&amp;L</th>
         </tr>
       </thead>
       <tbody>
