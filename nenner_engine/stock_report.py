@@ -1299,7 +1299,7 @@ def build_stock_report_html(stocks_data: list[dict],
           {footer}
         </table>'''
 
-    return _wrap_document(body_html=inner_table, max_width=700)
+    return _wrap_document(body_html=inner_table, max_width=960)
 
 
 def build_report_subject(stocks_data: list[dict]) -> str:

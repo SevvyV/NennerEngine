@@ -8,6 +8,9 @@ Automatically checks for new Nenner emails:
   - On dashboard startup (immediate)
   - Every 30 minutes from 8:00–11:00 AM Eastern Time
   - On manual refresh button click
+
+Signal export:
+  - Writes NennerSignals.xlsx on every refresh for trade blotter linking
 """
 
 import argparse
@@ -26,6 +29,7 @@ from nenner_engine.trade_stats import compute_instrument_stats
 # ---------------------------------------------------------------------------
 
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "nenner_signals.db")
+SIGNALS_EXPORT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "NennerSignals.xlsx")
 WATCHLIST_TICKERS = ["GC", "SI", "TSLA", "MSFT", "BAC", "SOYB"]
 REFRESH_INTERVAL_MS = 30_000  # 30 seconds
 
@@ -65,6 +69,84 @@ def fetch_current_state():
     """).fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+def export_signals_to_excel():
+    """Export current signal state to NennerSignals.xlsx for trade blotter linking.
+
+    Columns: Ticker, Instrument, Asset Class, Signal, Origin Price,
+    Cancel Direction, Cancel Level, Trigger Level, Implied Reversal, Signal Date
+
+    Called on every dashboard refresh so the file stays current.
+    """
+    from datetime import datetime
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    except ImportError:
+        print("Warning: openpyxl not installed — signal export disabled")
+        return
+
+    rows = fetch_current_state()
+    if not rows:
+        return
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Signals"
+
+    headers = [
+        "Ticker", "Instrument", "Asset Class", "Signal",
+        "Origin Price", "Cancel Direction", "Cancel Level",
+        "Trigger Level", "Implied Reversal", "Signal Date",
+    ]
+    header_font = Font(bold=True, size=11)
+    header_fill = PatternFill(start_color="D9E1F2", end_color="D9E1F2", fill_type="solid")
+    thin_border = Border(bottom=Side(style="thin", color="B0B0B0"))
+    buy_font = Font(bold=True, color="006100")
+    sell_font = Font(bold=True, color="9C0006")
+
+    for col, h in enumerate(headers, 1):
+        cell = ws.cell(row=1, column=col, value=h)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal="center")
+
+    for i, r in enumerate(rows, 2):
+        ws.cell(row=i, column=1, value=r["ticker"])
+        ws.cell(row=i, column=2, value=r["instrument"])
+        ws.cell(row=i, column=3, value=r["asset_class"])
+
+        sig_cell = ws.cell(row=i, column=4, value=r["effective_signal"])
+        if r["effective_signal"] == "BUY":
+            sig_cell.font = buy_font
+        elif r["effective_signal"] == "SELL":
+            sig_cell.font = sell_font
+
+        ws.cell(row=i, column=5, value=r.get("origin_price"))
+        ws.cell(row=i, column=6, value=r.get("cancel_direction"))
+        ws.cell(row=i, column=7, value=r.get("cancel_level"))
+        ws.cell(row=i, column=8, value=r.get("trigger_level"))
+        ws.cell(row=i, column=9, value=1 if r.get("implied_reversal") else 0)
+        ws.cell(row=i, column=10, value=r.get("last_signal_date"))
+
+    # Auto-fit column widths
+    for col in ws.columns:
+        max_len = max((len(str(cell.value or "")) for cell in col), default=8)
+        ws.column_dimensions[col[0].column_letter].width = min(max_len + 3, 30)
+
+    # Metadata row
+    meta_row = len(rows) + 3
+    ws.cell(row=meta_row, column=1, value="Last Updated:")
+    ws.cell(row=meta_row, column=2, value=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+    ws.cell(row=meta_row, column=1).font = Font(italic=True, color="808080")
+    ws.cell(row=meta_row, column=2).font = Font(italic=True, color="808080")
+
+    try:
+        wb.save(SIGNALS_EXPORT_PATH)
+    except PermissionError:
+        # File is open in Excel — skip silently
+        print(f"Warning: NennerSignals.xlsx is open in Excel, skipped export")
 
 
 def fetch_recent_changes(days=7):
@@ -778,6 +860,12 @@ def refresh_dashboard(_n, _btn):
             )
 
     footer = "  |  ".join(footer_parts)
+
+    # Export signals to Excel for trade blotter linking
+    try:
+        export_signals_to_excel()
+    except Exception as e:
+        print(f"Warning: signal export failed: {e}")
 
     return stats_bar, wl_cards, pos_cards, stocks_table, macro_table, changelog_table, footer
 
