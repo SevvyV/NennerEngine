@@ -1,6 +1,6 @@
-# morning_startup.ps1 -- Pre-market startup for NennerEngine
+# morning_startup.ps1 -- Pre-market startup
 # Scheduled via Task Scheduler at 6:00 AM ET, weekdays only
-# Ensures T1 (LSEG ONE), DataCenter, and dashboard.py are running
+# Launches: T1 (LSEG ONE), Nenner_DataCenter.xlsm, FischerDaily --monitor daemon
 
 $ErrorActionPreference = "Continue"
 
@@ -86,8 +86,8 @@ if ($t1Check) {
 }
 
 # --- 2. Excel Workbooks (fresh restart for clean RTD) ---
+# Note: OptionChains_Beta.xlsm no longer needed — Fischer uses DataBento for option chains
 $dcPath = "E:\Workspace\DataCenter\Nenner_DataCenter.xlsm"
-$ocPath = "E:\Workspace\DataCenter\OptionChains_Beta.xlsm"
 
 $excelWasRunning = $false
 try {
@@ -97,7 +97,7 @@ try {
 
     # Save any of our workbooks that are open
     foreach ($wb in $xl.Workbooks) {
-        if ($wb.Name -eq "Nenner_DataCenter.xlsm" -or $wb.Name -eq "OptionChains_Beta.xlsm") {
+        if ($wb.Name -eq "Nenner_DataCenter.xlsm") {
             Log "Excel: Saving $($wb.Name)..."
             $wb.Save()
         }
@@ -129,17 +129,12 @@ try {
     Log "Excel: Not running."
 }
 
-# Open both workbooks fresh
+# Open DataCenter workbook fresh
 Log "Excel: Opening Nenner_DataCenter.xlsm..."
 Start-Process -FilePath $dcPath
-Start-Sleep -Seconds 15
-
-Log "Excel: Opening OptionChains.xlsm..."
-Start-Process -FilePath $ocPath
-Start-Sleep -Seconds 15
-
-Log "Excel: Both workbooks launched. Waiting 30s for workbooks to fully load..."
 Start-Sleep -Seconds 30
+Log "Excel: DataCenter launched. Waiting for RTD to populate..."
+Start-Sleep -Seconds 15
 Log "Excel: RTD should be populating now."
 
 # --- 3. RTD Health Check ---
@@ -194,22 +189,26 @@ try {
     Log "RTD: Could not connect to Excel -- $($_.Exception.Message)"
 }
 
-# --- 4. Dashboard / Scheduler ---
-$dashProc = Get-Process -Name "python*" -ErrorAction SilentlyContinue |
+# --- 4. FischerDaily Scheduler Daemon ---
+# Replaces the old NennerEngine dashboard.py scheduler.
+# Handles: email parsing, stock reports, Fischer scans, auto-cancel,
+#          settlement, refresh polling, Nenner watchdog, daily close/vol.
+$fdVenv = "E:\Workspace\FischerDaily\.venv\Scripts\python.exe"
+$fdProc = Get-Process -Name "python*" -ErrorAction SilentlyContinue |
     Where-Object {
         try {
             $cmdLine = (Get-CimInstance Win32_Process -Filter "ProcessId=$($_.Id)").CommandLine
-            $cmdLine -match "dashboard\.py"
+            $cmdLine -match "fischer_daily.*--monitor"
         } catch { $false }
     }
 
-if ($dashProc) {
-    Log "Dashboard: Already running (PID $($dashProc.Id))"
+if ($fdProc) {
+    Log "FischerDaily: Monitor already running (PID $($fdProc.Id))"
 } else {
-    Log "Dashboard: Not running -- launching..."
-    Start-Process -FilePath "python" -ArgumentList "E:\Workspace\NennerEngine\dashboard.py" -WorkingDirectory "E:\Workspace\NennerEngine" -WindowStyle Minimized
+    Log "FischerDaily: Launching --monitor daemon..."
+    Start-Process -FilePath $fdVenv -ArgumentList "-m fischer_daily --monitor" -WorkingDirectory "E:\Workspace\FischerDaily" -WindowStyle Minimized
     Start-Sleep -Seconds 5
-    Log "Dashboard: Launched (scheduler will start automatically)"
+    Log "FischerDaily: Monitor launched"
 }
 
 Log "=== Morning startup complete ==="

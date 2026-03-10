@@ -17,7 +17,7 @@ import socket
 # Run from the NennerEngine project root
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
-DB_PATH = r"E:\Workspace\NennerEngine\nenner_signals.db"
+DB_PATH = r"E:\Workspace\DataCenter\nenner_signals.db"
 LOG_PATH = r"E:\Workspace\NennerEngine\nenner_engine.log"
 PID_PATH = r"E:\Workspace\NennerEngine\.launcher_pids"
 PORT = 8050

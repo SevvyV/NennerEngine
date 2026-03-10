@@ -800,8 +800,14 @@ def main():
         DB_PATH = args.db
 
     # --- Start email scheduler (checks on launch + daily at 8 AM ET) ---
+    # Guard against Werkzeug reloader: in debug mode, main() runs in BOTH
+    # the parent (reloader) and child (worker) processes.  Only start the
+    # scheduler in the worker to avoid duplicate briefs and emails.
+    import os
+    is_reloader_parent = args.debug and os.environ.get("WERKZEUG_RUN_MAIN") != "true"
+
     global _email_scheduler
-    if not args.no_email_check:
+    if not args.no_email_check and not is_reloader_parent:
         try:
             from nenner_engine.email_scheduler import EmailScheduler
             _email_scheduler = EmailScheduler(
@@ -816,6 +822,8 @@ def main():
         except Exception as e:
             print(f"Warning: Email scheduler failed to start: {e}")
             print("Dashboard will run without automatic email checking.")
+    elif is_reloader_parent:
+        print("Email scheduler deferred to worker process (debug reloader)")
     else:
         print("Email checking disabled (--no-email-check)")
 

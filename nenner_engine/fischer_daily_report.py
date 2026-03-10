@@ -769,16 +769,31 @@ def _scan_all_tickers(
     results : dict keyed by (ticker, intent, dte_label) -> rec dict
     failed  : list of tickers where no chain data was available
     """
-    # Phase 0: bulk pre-load put + call chains from OptionChains_Beta.xlsm
-    from .fischer_chain import read_all_chains
+    # Phase 0: bulk pre-load put chains — DataBento first, Excel fallback
     bulk_put_chains: dict = {}
     bulk_call_chains: dict = {}
     try:
-        bulk_put_chains, bulk_call_chains = read_all_chains()
-        log.info(f"Fischer {slot}: bulk-loaded {len(bulk_put_chains)} put + "
-                 f"{len(bulk_call_chains)} call chains from OptionChains")
+        from .databento_feed import is_available, fetch_all_option_chains
+        if is_available():
+            from .prices import read_t1_prices
+            spots = read_t1_prices()
+            if len(spots) >= 5:
+                log.info(f"Fischer {slot}: DataBento available, got {len(spots)} spots")
+                bulk_put_chains, _ = fetch_all_option_chains(spots=spots)
+                log.info(f"Fischer {slot}: DataBento loaded {len(bulk_put_chains)} put chains")
+            else:
+                log.warning(f"Fischer {slot}: only {len(spots)} spots, skipping DataBento")
     except Exception as e:
-        log.warning(f"Fischer {slot}: OptionChains bulk read failed ({e}), falling back to Options_RT")
+        log.warning(f"Fischer {slot}: DataBento failed ({e})")
+
+    if not bulk_put_chains:
+        try:
+            from .fischer_chain import read_all_chains
+            bulk_put_chains, bulk_call_chains = read_all_chains()
+            log.info(f"Fischer {slot}: Excel fallback — loaded {len(bulk_put_chains)} put + "
+                     f"{len(bulk_call_chains)} call chains")
+        except Exception as e:
+            log.warning(f"Fischer {slot}: Excel bulk read also failed ({e}), falling back to Options_RT")
 
     results = {}
     failed = set()

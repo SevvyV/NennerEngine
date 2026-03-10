@@ -463,11 +463,41 @@ def _is_workbook_open() -> bool:
 def _send_t1_open_email():
     """Send a one-time email asking user to open the T1 workbook.
 
-    Only sends once per session (tracked by _t1_email_sent flag).
+    Deduped at two levels:
+      1. Module-level _t1_email_sent flag (per-process)
+      2. alert_log DB table (cross-process, once per day)
     """
     global _t1_email_sent
     if _t1_email_sent:
         return
+    _t1_email_sent = True  # set early to prevent retries on failure
+
+    # DB-level dedup: only one "please open" email per day across all processes
+    try:
+        from .config import DEFAULT_DB_PATH
+        from .db import init_db
+        import datetime
+        conn = init_db(DEFAULT_DB_PATH)
+        today_str = datetime.date.today().isoformat()
+        already = conn.execute(
+            "SELECT 1 FROM alert_log WHERE alert_type = 't1_workbook_open' "
+            "AND created_at >= ? LIMIT 1",
+            (today_str,),
+        ).fetchone()
+        if already:
+            log.info("T1 open-workbook email already sent today (another process), skipping")
+            conn.close()
+            return
+        conn.execute(
+            "INSERT INTO alert_log (ticker, alert_type, severity, message) "
+            "VALUES ('ALL', 't1_workbook_open', 'info', ?)",
+            (f"T1 workbook open email sent {today_str}",),
+        )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        log.warning(f"T1 open-email DB dedup check failed (sending anyway): {e}")
+
     try:
         from .postmaster import send_email
         send_email(
@@ -479,7 +509,6 @@ def _send_t1_open_email():
             "Restart the engine after opening the workbook to re-enable "
             "live prices.</p>",
         )
-        _t1_email_sent = True
         log.info("Sent email notification: T1 workbook not open")
     except Exception as e:
         log.error(f"Failed to send T1 open-workbook email: {e}")

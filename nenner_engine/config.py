@@ -4,7 +4,7 @@ from pathlib import Path as _Path
 
 # ── Project Layout ──────────────────────────────────────────────
 PROJECT_ROOT = _Path(__file__).resolve().parent.parent
-DEFAULT_DB_PATH = str(PROJECT_ROOT / "nenner_signals.db")
+DEFAULT_DB_PATH = str(_Path(r"E:\Workspace\DataCenter\nenner_signals.db"))
 FISCHER_DEBUG_DB = str(PROJECT_ROOT / "fischer_scan_debug.db")
 T1_WORKBOOK = r"E:\Workspace\DataCenter\Nenner_DataCenter.xlsm"
 
