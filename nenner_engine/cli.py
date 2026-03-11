@@ -186,23 +186,6 @@ Examples:
                         help="Generate a Stanley brief from the latest email (on-demand)")
     parser.add_argument("--stock-report", action="store_true",
                         help="Generate and email Stanley's Daily Stock Report")
-    # --- Fischer subscription management ---
-    parser.add_argument("--fischer-add-subscriber", nargs=4,
-                        metavar=("EMAIL", "FIRST", "LAST", "PORTFOLIO"),
-                        help="Add a Fischer subscriber: email first_name last_name portfolio_name")
-    parser.add_argument("--fischer-remove-subscriber", type=str, metavar="EMAIL",
-                        help="Deactivate a Fischer subscriber by email")
-    parser.add_argument("--fischer-reactivate-subscriber", type=str, metavar="EMAIL",
-                        help="Reactivate a deactivated Fischer subscriber by email")
-    parser.add_argument("--fischer-list-subscribers", action="store_true",
-                        help="List all Fischer subscribers")
-    parser.add_argument("--fischer-add-portfolio", nargs=3,
-                        metavar=("NAME", "LABEL", "TICKERS"),
-                        help="Add a Fischer portfolio: name label 'AMZN,AVGO,IWM'")
-    parser.add_argument("--fischer-list-portfolios", action="store_true",
-                        help="List all Fischer portfolios")
-    parser.add_argument("--fischer-refresh", type=str, metavar="EMAIL",
-                        help="Manually trigger a Fischer refresh for a subscriber by email")
 
     parser.add_argument("--db", type=str, default=default_db,
                         help=f"Database path (default: {default_db})")
@@ -268,57 +251,6 @@ Examples:
                       f"cancel={r['cancel_level']:.2f})")
         else:
             print("No cancel levels breached today.")
-    elif args.fischer_add_subscriber:
-        from .fischer_subscribers import add_subscriber
-        email, first, last, portfolio = args.fischer_add_subscriber
-        sid = add_subscriber(conn, email, first, last, portfolio)
-        print(f"Added subscriber #{sid}: {first} {last} <{email}> -> {portfolio}")
-    elif args.fischer_remove_subscriber:
-        from .fischer_subscribers import deactivate_subscriber
-        ok = deactivate_subscriber(conn, args.fischer_remove_subscriber)
-        print(f"Deactivated: {args.fischer_remove_subscriber}" if ok else "Not found")
-    elif args.fischer_reactivate_subscriber:
-        from .fischer_subscribers import reactivate_subscriber
-        ok = reactivate_subscriber(conn, args.fischer_reactivate_subscriber)
-        print(f"Reactivated: {args.fischer_reactivate_subscriber}" if ok else "Not found")
-    elif args.fischer_list_subscribers:
-        from .fischer_subscribers import list_subscribers
-        subs = list_subscribers(conn)
-        if not subs:
-            print("No subscribers. Add one with --fischer-add-subscriber")
-        else:
-            print(f"\n  FISCHER SUBSCRIBERS ({len(subs)})")
-            print("  " + "=" * 60)
-            for s in subs:
-                status = "ACTIVE" if s["active"] else "inactive"
-                print(f"  #{s['id']:3d} {s['first_name']} {s['last_name']} "
-                      f"<{s['email']}> -> {s['portfolio_name']} "
-                      f"({status}) max={s['max_daily_refreshes']}/day")
-            print()
-    elif args.fischer_add_portfolio:
-        from .fischer_subscribers import add_portfolio
-        name, label, tickers_csv = args.fischer_add_portfolio
-        tickers = [t.strip() for t in tickers_csv.split(",")]
-        add_portfolio(conn, name, label, tickers, {})
-        # Share alloc is now computed dynamically from spot price at scan time
-        print(f"Added portfolio '{name}' ({label}): {tickers}")
-    elif args.fischer_list_portfolios:
-        from .fischer_subscribers import list_portfolios
-        ports = list_portfolios(conn)
-        if not ports:
-            print("No portfolios. Add one with --fischer-add-portfolio")
-        else:
-            print(f"\n  FISCHER PORTFOLIOS ({len(ports)})")
-            print("  " + "=" * 60)
-            for p in ports:
-                conv = "yes" if p["show_conviction"] else "no"
-                print(f"  {p['portfolio_name']}: {p['label']} "
-                      f"-> {','.join(p['tickers'])} (conviction={conv})")
-            print()
-    elif args.fischer_refresh:
-        from .fischer_subscribers import manual_refresh
-        ok = manual_refresh(conn, args.fischer_refresh, db_path=args.db)
-        print("Refresh sent" if ok else "Failed — check logs")
     elif args.positions:
         _show_positions(conn)
     elif args.monitor:

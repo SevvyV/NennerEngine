@@ -22,7 +22,7 @@ from .config import (
     INTERVAL_WINDOW_START, INTERVAL_WINDOW_END,
     STOCK_REPORT_HOUR, STOCK_REPORT_MINUTE,
     AUTO_CANCEL_HOUR, AUTO_CANCEL_MINUTE,
-    FISCHER_SCAN_SCHEDULE, SCHEDULER_TICK_SECONDS,
+    SCHEDULER_TICK_SECONDS,
 )
 
 log = logging.getLogger("nenner")
@@ -152,29 +152,6 @@ def _send_stock_report(db_path: str):
     except Exception as e:
         log.error(f"Stock report send failed: {e}", exc_info=True)
 
-
-def _send_fischer_scan_report(db_path: str, slot: str):
-    """Generate and send Fischer scan report for a specific slot."""
-    try:
-        from .fischer_daily_report import send_scan_report
-        from .fischer_reliability import FischerReliability
-
-        rel = FischerReliability.get_instance()
-        if rel:
-            rel.wrap_scan_call(db_path, slot, lambda p, s: send_scan_report(p, slot=s))
-        else:
-            send_scan_report(db_path, slot=slot)
-    except Exception as e:
-        log.error(f"Fischer {slot} report failed: {e}", exc_info=True)
-
-
-def _run_fischer_settlement(db_path: str):
-    """Settle expired Fischer recommendations and email results."""
-    try:
-        from .fischer_daily_report import send_settlement_report
-        send_settlement_report(db_path)
-    except Exception as e:
-        log.error(f"Fischer settlement failed: {e}", exc_info=True)
 
 
 def _run_auto_cancel(db_path: str, date_str: Optional[str] = None):
@@ -391,20 +368,8 @@ class EmailScheduler:
         self._last_auto_cancel_date: Optional[str] = None
         # Track stock report: date string of last send
         self._last_stock_report_date: Optional[str] = None
-        # Track Fischer scans: set of "YYYY-MM-DD_slot" keys
-        self._fischer_sent_slots: set[str] = set()
-        # Track Fischer refresh polling: last poll time
-        self._last_refresh_poll: Optional[datetime] = None
         # Track Stanley brief: email_id of last brief sent
         self._last_stanley_brief_email_id: Optional[int] = None
-
-        # Reliability layer (initialized lazily)
-        self._reliability = None
-        try:
-            from .fischer_reliability import FischerReliability
-            self._reliability = FischerReliability.initialize(self._stop_event)
-        except Exception as e:
-            log.warning(f"Fischer reliability layer not available: {e}")
 
     @property
     def last_result(self) -> Optional[dict]:
@@ -443,45 +408,6 @@ class EmailScheduler:
                          f"({STOCK_REPORT_HOUR}:{STOCK_REPORT_MINUTE:02d} ET)")
                 _send_stock_report(self.db_path)
 
-    def _check_fischer_report(self, now_et: datetime):
-        """Check if it's time to send any Fischer scan slot (weekdays only)."""
-        if now_et.weekday() >= 5:
-            return  # skip weekends
-
-        today_str = now_et.strftime("%Y-%m-%d")
-        for sched_hour, sched_minute, slot in FISCHER_SCAN_SCHEDULE:
-            if (now_et.hour == sched_hour
-                    and sched_minute <= now_et.minute < sched_minute + 5):
-                slot_key = f"{today_str}_{slot}"
-                if slot_key not in self._fischer_sent_slots:
-                    self._fischer_sent_slots.add(slot_key)
-                    log.info(f"Email scheduler: sending Fischer {slot} scan "
-                             f"({sched_hour}:{sched_minute:02d} ET)")
-                    _send_fischer_scan_report(self.db_path, slot)
-
-    def _check_fischer_refresh(self, now_et: datetime):
-        """Poll for Refresh Fischer emails every 2 minutes during market hours."""
-        if now_et.weekday() >= 5:
-            return  # skip weekends
-        h, m = now_et.hour, now_et.minute
-        market_open = (h > 9 or (h == 9 and m >= 30))
-        market_closed = (h > 16 or (h == 16 and m >= 30))
-        if not market_open or market_closed:
-            return
-
-        now = datetime.now()
-        if (self._last_refresh_poll is None
-                or now - self._last_refresh_poll >= timedelta(seconds=120)):
-            self._last_refresh_poll = now
-            try:
-                if self._reliability and self._reliability.imap_poller:
-                    self._reliability.imap_poller.poll(self.db_path)
-                else:
-                    from .fischer_subscribers import poll_refresh_requests
-                    poll_refresh_requests(self.db_path)
-            except Exception as e:
-                log.error(f"Fischer refresh poll failed: {e}", exc_info=True)
-
     def _check_auto_cancel(self, now_et: datetime):
         """Check if it's time to run auto-cancel (4:30 PM ET, once per day)."""
         if (now_et.hour == AUTO_CANCEL_HOUR
@@ -491,8 +417,6 @@ class EmailScheduler:
                 self._last_auto_cancel_date = today_str
                 log.info(f"Auto-cancel: running daily check for {today_str}")
                 _run_auto_cancel(self.db_path, today_str)
-                # Also settle any expired Fischer recommendations
-                _run_fischer_settlement(self.db_path)
 
     def _startup_stock_report_catchup(self):
         """Send stock report on startup if we missed today's scheduled window.
@@ -522,49 +446,6 @@ class EmailScheduler:
             )
             _send_stock_report(self.db_path)
 
-    def _startup_fischer_catchup(self):
-        """Send missed Fischer scans on startup if past their scheduled windows.
-
-        Checks the DB (fischer_recommendations) to avoid duplicate sends across
-        restarts — the in-memory _fischer_sent_slots set resets each launch.
-        """
-        now_et = _now_eastern()
-        if now_et.weekday() >= 5:
-            return  # weekend
-
-        today_str = now_et.strftime("%Y-%m-%d")
-
-        # Pre-populate sent_slots from DB so restarts don't re-fire
-        try:
-            from .db import init_db
-            conn = init_db(self.db_path)
-            existing = conn.execute(
-                "SELECT DISTINCT scan_slot FROM fischer_recommendations "
-                "WHERE report_date = ?", (today_str,)
-            ).fetchall()
-            conn.close()
-            for row in existing:
-                slot_key = f"{today_str}_{row[0]}"
-                self._fischer_sent_slots.add(slot_key)
-                log.info(f"Fischer catchup: {row[0]} already sent today (from DB), skipping")
-        except Exception as e:
-            log.warning(f"Fischer catchup DB check failed: {e}")
-
-        for sched_hour, sched_minute, slot in FISCHER_SCAN_SCHEDULE:
-            slot_key = f"{today_str}_{slot}"
-            if slot_key in self._fischer_sent_slots:
-                continue  # already sent this session or found in DB
-
-            scheduled = now_et.replace(
-                hour=sched_hour, minute=sched_minute, second=0, microsecond=0)
-            if now_et > scheduled + timedelta(minutes=5):
-                self._fischer_sent_slots.add(slot_key)
-                log.info(
-                    f"Fischer {slot} catch-up: missed {sched_hour}:"
-                    f"{sched_minute:02d} window, sending now "
-                    f"(launched at {now_et.strftime('%H:%M')} ET)")
-                _send_fischer_scan_report(self.db_path, slot)
-
     def _run(self):
         """Main scheduler loop."""
         # --- Startup check ---
@@ -573,9 +454,6 @@ class EmailScheduler:
 
         # --- Startup stock report catch-up (if we missed 7 AM) ---
         self._startup_stock_report_catchup()
-
-        # --- Startup Fischer scan catch-up (if we missed any slots) ---
-        self._startup_fischer_catchup()
 
         # --- Startup auto-cancel catchup (covers missed days) ---
         log.info("Auto-cancel: running startup catchup")
@@ -620,21 +498,11 @@ class EmailScheduler:
                 # Stanley's Daily Stock Report: 7:00 AM ET weekdays
                 self._check_stock_report(now_et)
 
-                # Fischer daily report: 10:00 AM ET weekdays
-                self._check_fischer_report(now_et)
-
-                # Fischer on-demand refresh: poll IMAP every 2 min during market hours
-                self._check_fischer_refresh(now_et)
-
-                # Auto-cancel + Fischer settlement: 4:30 PM ET daily after close
+                # Auto-cancel: 4:30 PM ET daily after close
                 self._check_auto_cancel(now_et)
 
             except Exception as e:
                 log.error(f"Email scheduler loop error: {e}", exc_info=True)
-
-            # Health tick (writes 1 line/min to logs/fischer_health.log)
-            if self._reliability:
-                self._reliability.record_health_tick()
 
             # Sleep in small increments for responsive shutdown
             self._stop_event.wait(timeout=SCHEDULER_TICK_SECONDS)
@@ -654,19 +522,9 @@ class EmailScheduler:
         self._thread.start()
         log.info("Email scheduler started (daemon thread)")
 
-        # Register graceful shutdown signal handlers (main thread only)
-        if self._reliability and self._reliability.shutdown:
-            try:
-                self._reliability.shutdown.register_handlers()
-            except Exception as e:
-                log.debug(f"Signal handler registration skipped: {e}")
-
     def stop(self):
-        """Signal the scheduler to stop (with graceful drain if reliability is active)."""
-        if self._reliability and self._reliability.shutdown:
-            self._reliability.shutdown.shutdown()
-        else:
-            self._stop_event.set()
+        """Signal the scheduler to stop."""
+        self._stop_event.set()
         if self._thread:
             self._thread.join(timeout=120)
             log.info("Email scheduler stopped")

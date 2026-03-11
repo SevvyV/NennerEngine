@@ -5,7 +5,6 @@ from pathlib import Path as _Path
 # ── Project Layout ──────────────────────────────────────────────
 PROJECT_ROOT = _Path(__file__).resolve().parent.parent
 DEFAULT_DB_PATH = str(_Path(r"E:\Workspace\DataCenter\nenner_signals.db"))
-FISCHER_DEBUG_DB = str(PROJECT_ROOT / "fischer_scan_debug.db")
 T1_WORKBOOK = r"E:\Workspace\DataCenter\Nenner_DataCenter.xlsm"
 
 # ── Email Recipients ────────────────────────────────────────────
@@ -31,7 +30,4 @@ INTERVAL_WINDOW_START = 8
 INTERVAL_WINDOW_END = 11
 STOCK_REPORT_HOUR, STOCK_REPORT_MINUTE = 7, 0
 AUTO_CANCEL_HOUR, AUTO_CANCEL_MINUTE = 16, 30
-FISCHER_SCAN_SCHEDULE: list[tuple[int, int, str]] = [
-    (9, 45, "opening"),
-]
 SCHEDULER_TICK_SECONDS = 30
