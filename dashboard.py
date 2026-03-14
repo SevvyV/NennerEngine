@@ -10,7 +10,7 @@ Automatically checks for new Nenner emails:
   - On manual refresh button click
 
 Signal export:
-  - Writes NennerSignals.xlsx on every refresh for trade blotter linking
+  - Writes NennerSignals sheet in Nenner_Positions.xlsm on every refresh for trade blotter linking
 """
 
 import argparse
@@ -29,8 +29,10 @@ from nenner_engine.trade_stats import compute_instrument_stats
 # ---------------------------------------------------------------------------
 
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "nenner_signals.db")
-SIGNALS_EXPORT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "NennerSignals.xlsx")
-WATCHLIST_TICKERS = ["GC", "SI", "TSLA", "MSFT", "BAC", "SOYB"]
+POSITIONS_WORKBOOK = r"E:\Workspace\DataCenter\Nenner_Positions.xlsm"
+WATCHLIST_ROW1 = ["TSLA", "BAC", "MSFT", "AAPL", "GOOG", "NVDA"]
+WATCHLIST_ROW2 = ["GC", "SI", "SLV", "SOYB"]
+WATCHLIST_TICKERS = WATCHLIST_ROW1 + WATCHLIST_ROW2
 REFRESH_INTERVAL_MS = 30_000  # 30 seconds
 
 # Email scheduler singleton (initialized in main())
@@ -72,81 +74,73 @@ def fetch_current_state():
 
 
 def export_signals_to_excel():
-    """Export current signal state to NennerSignals.xlsx for trade blotter linking.
+    """Export current signal state to the NennerSignals sheet in Nenner_Positions.xlsm.
 
-    Columns: Ticker, Instrument, Asset Class, Signal, Origin Price,
-    Cancel Direction, Cancel Level, Trigger Level, Implied Reversal, Signal Date
+    Writes directly to the live Excel instance via xlwings so the data is
+    immediately available for VLOOKUP from the trade sheets.
 
-    Called on every dashboard refresh so the file stays current.
+    Called on every dashboard refresh (~30s).
     """
     from datetime import datetime
     try:
-        from openpyxl import Workbook
-        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+        import xlwings as xw
     except ImportError:
-        print("Warning: openpyxl not installed — signal export disabled")
+        print("Warning: xlwings not installed — signal export disabled")
         return
 
     rows = fetch_current_state()
     if not rows:
         return
 
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Signals"
+    # Attach to the already-open workbook
+    try:
+        wb = xw.Book(POSITIONS_WORKBOOK)
+    except Exception:
+        # Workbook not open in Excel — skip silently
+        return
+
+    sheet_name = "NennerSignals"
+    if sheet_name in [s.name for s in wb.sheets]:
+        ws = wb.sheets[sheet_name]
+        ws.clear()
+    else:
+        ws = wb.sheets.add(sheet_name, after=wb.sheets[-1])
 
     headers = [
         "Ticker", "Instrument", "Asset Class", "Signal",
         "Origin Price", "Cancel Direction", "Cancel Level",
         "Trigger Level", "Implied Reversal", "Signal Date",
     ]
-    header_font = Font(bold=True, size=11)
-    header_fill = PatternFill(start_color="D9E1F2", end_color="D9E1F2", fill_type="solid")
-    thin_border = Border(bottom=Side(style="thin", color="B0B0B0"))
-    buy_font = Font(bold=True, color="006100")
-    sell_font = Font(bold=True, color="9C0006")
 
-    for col, h in enumerate(headers, 1):
-        cell = ws.cell(row=1, column=col, value=h)
-        cell.font = header_font
-        cell.fill = header_fill
-        cell.alignment = Alignment(horizontal="center")
+    # Build data rows
+    data = []
+    for r in rows:
+        data.append([
+            r["ticker"],
+            r["instrument"],
+            r["asset_class"],
+            r["effective_signal"],
+            r.get("origin_price"),
+            r.get("cancel_direction"),
+            r.get("cancel_level"),
+            r.get("trigger_level"),
+            1 if r.get("implied_reversal") else 0,
+            r.get("last_signal_date"),
+        ])
 
-    for i, r in enumerate(rows, 2):
-        ws.cell(row=i, column=1, value=r["ticker"])
-        ws.cell(row=i, column=2, value=r["instrument"])
-        ws.cell(row=i, column=3, value=r["asset_class"])
+    # Write headers + data in bulk
+    ws.range("A1").value = headers
+    if data:
+        ws.range("A2").value = data
 
-        sig_cell = ws.cell(row=i, column=4, value=r["effective_signal"])
-        if r["effective_signal"] == "BUY":
-            sig_cell.font = buy_font
-        elif r["effective_signal"] == "SELL":
-            sig_cell.font = sell_font
+    # Formatting
+    ws.range("A1").expand("right").font.bold = True
+    ws.autofit("c")
 
-        ws.cell(row=i, column=5, value=r.get("origin_price"))
-        ws.cell(row=i, column=6, value=r.get("cancel_direction"))
-        ws.cell(row=i, column=7, value=r.get("cancel_level"))
-        ws.cell(row=i, column=8, value=r.get("trigger_level"))
-        ws.cell(row=i, column=9, value=1 if r.get("implied_reversal") else 0)
-        ws.cell(row=i, column=10, value=r.get("last_signal_date"))
-
-    # Auto-fit column widths
-    for col in ws.columns:
-        max_len = max((len(str(cell.value or "")) for cell in col), default=8)
-        ws.column_dimensions[col[0].column_letter].width = min(max_len + 3, 30)
-
-    # Metadata row
-    meta_row = len(rows) + 3
-    ws.cell(row=meta_row, column=1, value="Last Updated:")
-    ws.cell(row=meta_row, column=2, value=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-    ws.cell(row=meta_row, column=1).font = Font(italic=True, color="808080")
-    ws.cell(row=meta_row, column=2).font = Font(italic=True, color="808080")
-
-    try:
-        wb.save(SIGNALS_EXPORT_PATH)
-    except PermissionError:
-        # File is open in Excel — skip silently
-        print(f"Warning: NennerSignals.xlsx is open in Excel, skipped export")
+    # Timestamp
+    meta_row = len(data) + 3
+    ws.range(f"A{meta_row}").value = "Last Updated:"
+    ws.range(f"B{meta_row}").value = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
 def fetch_recent_changes(days=7):
@@ -435,15 +429,15 @@ SIGNAL_TABLE_STYLE_HEADER = {
     "color": COLOR_HEADER,
     "fontWeight": "bold",
     "border": "1px solid #444",
-    "fontSize": "0.85rem",
+    "fontSize": "1.45rem",
 }
 
 SIGNAL_TABLE_STYLE_CELL = {
     "backgroundColor": "#1e2226",
     "color": "#e0e0e0",
     "border": "1px solid #333",
-    "fontSize": "0.85rem",
-    "padding": "6px 10px",
+    "fontSize": "1.45rem",
+    "padding": "10px 14px",
 }
 
 COLOR_PF_GOOD = "#00bc8c"    # green — PF >= 2.0
@@ -610,7 +604,7 @@ def build_layout():
         html.Div([
             html.H5("WATCHLIST", className="mb-3",
                      style={"color": COLOR_HEADER, "letterSpacing": "0.1em", "fontWeight": "600"}),
-            dbc.Row(id="watchlist-cards"),
+            html.Div(id="watchlist-cards"),
         ], className="mb-4"),
 
         html.Hr(style={"borderColor": "#444"}),
@@ -703,9 +697,12 @@ def refresh_dashboard(_n, _btn):
     stats = fetch_db_stats()
     stats_bar = make_stats_bar(stats)
 
-    # Watchlist cards
+    # Watchlist cards – split into two rows
     wl = fetch_watchlist()
-    wl_cards = [make_watchlist_card(r) for r in wl]
+    wl_by_ticker = {r.get("ticker"): r for r in wl}
+    wl_row1 = [make_watchlist_card(wl_by_ticker[t]) for t in WATCHLIST_ROW1 if t in wl_by_ticker]
+    wl_row2 = [make_watchlist_card(wl_by_ticker[t]) for t in WATCHLIST_ROW2 if t in wl_by_ticker]
+    wl_cards = html.Div([dbc.Row(wl_row1, className="mb-2"), dbc.Row(wl_row2)])
 
     # Position cards
     pos_data = fetch_positions()
