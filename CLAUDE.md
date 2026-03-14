@@ -96,5 +96,27 @@ Confidence = min(trade_count / 50, 1.0). Cutoffs: macro 2023-02-21, single stock
 `.claude/rules/signal-interpretation.md` — signal hierarchy, cycles, freshness decay
 `.claude/rules/statistical-analysis.md` — SQS framework, momentum, vol regime, backtest
 
+## DataBento Library Reference
+
+When modifying any DataBento-related code, ALWAYS read the relevant source files in `E:\Workspace\FischerDaily\docs\databento_lib\` first:
+
+- Live client: `docs/databento_lib/databento/live/client.py`
+- Session: `docs/databento_lib/databento/live/session.py`
+- Protocol: `docs/databento_lib/databento/live/protocol.py`
+- Symbology: `docs/databento_lib/databento/common/symbology.py`
+- Enums: `docs/databento_lib/databento/common/enums.py`
+
+Key facts already discovered:
+- `db.Live` uses CLASS-LEVEL shared asyncio event loop (`_loop`, `_thread`) — all instances in one process share it
+- `stop()` is non-blocking — must `block_for_close()` then `terminate()` for full cleanup
+- `LiveIterator.__del__` calls `terminate()` — GC timing creates race conditions
+- For long-running processes, use subprocess isolation for clean event loops
+
+Strike discovery:
+- Strike increments are variable per ticker AND price range (e.g. NVDA: $5 far OTM, $1 near ATM, $2.50 transitional)
+- `strike_increments.json` is the production source — instant lookup
+- DataBento definition schema (`schema="definition"`, `stype_in="parent"`, `symbols="TICKER.OPT"`) can discover all strikes dynamically but is too slow for real-time use (~48s per ticker)
+- If a ticker's increment is wrong in the JSON, update it manually — do NOT add slow API calls to the hot path
+
 ## Architecture Reference
 Codebase structure, DB schema, file map, Fischer details, commands: `ARCHITECTURE.md`

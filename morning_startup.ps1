@@ -1,6 +1,7 @@
 # morning_startup.ps1 -- Pre-market startup
-# Scheduled via Task Scheduler at 6:00 AM ET, weekdays only
-# Launches: T1 (LSEG ONE), Nenner_DataCenter.xlsm, FischerDaily --monitor daemon
+# Scheduled via Task Scheduler at 8:00 AM ET, weekdays only
+# Launches: T1 (LSEG ONE) with auto-login and RTD health check
+# DataCenter, FischerDaily monitor, and NennerDashboard are separate scheduled tasks
 
 $ErrorActionPreference = "Continue"
 
@@ -49,9 +50,10 @@ for ($i = 0; $i -lt 30; $i++) {
 }
 
 if ($loginReady) {
-    Log "T1: Login window detected -- auto-signing in..."
-    Start-Sleep -Seconds 2
+    Log "T1: Login window detected -- waiting for login form to fully render..."
+    Start-Sleep -Seconds 15
 
+    Log "T1: Sending credentials..."
     $wsh.SendKeys("sevagv@gmail.com")
     Start-Sleep -Seconds 1
 
@@ -60,155 +62,56 @@ if ($loginReady) {
 
     $wsh.SendKeys("{ENTER}")
 
-    Log "T1: Sign-in keys sent. Waiting 15 min for T1 to fully connect..."
+    Log "T1: Sign-in keys sent. Waiting 5 min for early health check..."
 } else {
     Log "T1: WARNING -- login window not detected after 60s. Sign in manually."
 }
 
-# Wait 15 minutes for T1 to fully initialize and RTD server to connect
-Start-Sleep -Seconds 900
+# Early health check at ~5 min — catch cold-start crashes quickly
+Start-Sleep -Seconds 300
 
-# Verify T1 is actually running before opening spreadsheets
+$t1Early = Get-Process -Name "LSEG ONE" -ErrorAction SilentlyContinue
+if ($t1Early) {
+    Log "T1: Early check passed (PID $($t1Early.Id)). Waiting 10 more min..."
+    Start-Sleep -Seconds 600
+} else {
+    Log "T1: Crashed after launch — relaunching and re-sending credentials..."
+    Start-Process -FilePath $t1Exe
+
+    # Wait for login window again
+    $loginReady2 = $false
+    for ($i = 0; $i -lt 30; $i++) {
+        Start-Sleep -Seconds 2
+        $activated2 = $wsh.AppActivate("LSEG")
+        if ($activated2) { $loginReady2 = $true; break }
+    }
+
+    if ($loginReady2) {
+        Log "T1: Login window detected on relaunch -- waiting for form to render..."
+        Start-Sleep -Seconds 15
+        Log "T1: Sending credentials (attempt 2)..."
+        $wsh.SendKeys("sevagv@gmail.com")
+        Start-Sleep -Seconds 1
+        $wsh.SendKeys("{TAB}")
+        Start-Sleep -Seconds 2
+        $wsh.SendKeys("{ENTER}")
+        Log "T1: Sign-in keys sent (attempt 2). Waiting 10 min..."
+    } else {
+        Log "T1: WARNING -- login window not detected on relaunch. Sign in manually."
+    }
+
+    Start-Sleep -Seconds 600
+}
+
+# Final verification
 $t1Check = Get-Process -Name "LSEG ONE" -ErrorAction SilentlyContinue
 if ($t1Check) {
     Log "T1: Confirmed running (PID $($t1Check.Id))"
 } else {
-    Log "T1: WARNING -- process not found after 15 min wait. Attempting relaunch..."
-    Start-Process -FilePath $t1Exe
-    Start-Sleep -Seconds 60
-
-    $t1Check2 = Get-Process -Name "LSEG ONE" -ErrorAction SilentlyContinue
-    if ($t1Check2) {
-        Log "T1: Relaunch successful (PID $($t1Check2.Id)). Sign in manually."
-    } else {
-        Log "T1: FAILED -- could not start T1. Continuing with spreadsheets anyway."
-    }
+    Log "T1: FAILED -- not running after both attempts. Sign in manually."
 }
 
-# --- 2. Excel Workbooks (fresh restart for clean RTD) ---
-# Note: OptionChains_Beta.xlsm no longer needed — Fischer uses DataBento for option chains
-$dcPath = "E:\Workspace\DataCenter\Nenner_DataCenter.xlsm"
-
-$excelWasRunning = $false
-try {
-    $xl = [System.Runtime.InteropServices.Marshal]::GetActiveObject("Excel.Application")
-    $excelWasRunning = $true
-    Log "Excel: Found running instance. Saving open workbooks and closing..."
-
-    # Save any of our workbooks that are open
-    foreach ($wb in $xl.Workbooks) {
-        if ($wb.Name -eq "Nenner_DataCenter.xlsm") {
-            Log "Excel: Saving $($wb.Name)..."
-            $wb.Save()
-        }
-    }
-
-    # Quit Excel gracefully
-    $xl.Quit()
-    [System.Runtime.InteropServices.Marshal]::ReleaseComObject($xl) | Out-Null
-
-    # Wait for Excel process to fully exit
-    Log "Excel: Waiting for process to exit..."
-    for ($i = 0; $i -lt 15; $i++) {
-        $excelProc = Get-Process -Name "EXCEL" -ErrorAction SilentlyContinue
-        if (-not $excelProc) { break }
-        Start-Sleep -Seconds 2
-    }
-
-    # If still alive after 30s, force kill
-    $excelProc = Get-Process -Name "EXCEL" -ErrorAction SilentlyContinue
-    if ($excelProc) {
-        Log "Excel: Still running after 30s -- force killing..."
-        $excelProc | Stop-Process -Force
-        Start-Sleep -Seconds 3
-    }
-
-    Log "Excel: Closed. Restarting fresh..."
-} catch {
-    # No running Excel instance -- clean slate
-    Log "Excel: Not running."
-}
-
-# Open DataCenter workbook fresh
-Log "Excel: Opening Nenner_DataCenter.xlsm..."
-Start-Process -FilePath $dcPath
-Start-Sleep -Seconds 30
-Log "Excel: DataCenter launched. Waiting for RTD to populate..."
-Start-Sleep -Seconds 15
-Log "Excel: RTD should be populating now."
-
-# --- 3. RTD Health Check ---
-# After T1 and DataCenter are up, verify RTD is actually feeding prices.
-# Reads a known cell (Equities_RT!B5 = first stock BID). If it's empty,
-# an error string, or zero, RTD is dead -- reset and retry.
-Log "RTD: Checking health..."
-$rtdHealthy = $false
-try {
-    $xl = [System.Runtime.InteropServices.Marshal]::GetActiveObject("Excel.Application")
-    $dc = $null
-    foreach ($wb in $xl.Workbooks) {
-        if ($wb.Name -eq "Nenner_DataCenter.xlsm") { $dc = $wb; break }
-    }
-    if ($dc) {
-        $sheet = $dc.Sheets.Item("Equities_RT")
-        $cellVal = $sheet.Range("B5").Value2
-        if ($cellVal -ne $null -and $cellVal -is [double] -and $cellVal -gt 0) {
-            Log "RTD: Healthy -- Equities_RT!B5 = $cellVal"
-            $rtdHealthy = $true
-        } else {
-            Log "RTD: Dead or stale -- Equities_RT!B5 = '$cellVal'. Resetting..."
-        }
-    } else {
-        Log "RTD: DataCenter workbook not found in Excel."
-    }
-
-    if (-not $rtdHealthy -and $dc) {
-        # Reset all RTD connections and force recalc
-        try {
-            $xl.RTD.ResetAll()
-            Log "RTD: ResetAll() called. Waiting 30s for reconnect..."
-            Start-Sleep -Seconds 30
-            $xl.CalculateFull()
-            Start-Sleep -Seconds 10
-
-            # Re-check
-            $cellVal2 = $sheet.Range("B5").Value2
-            if ($cellVal2 -ne $null -and $cellVal2 -is [double] -and $cellVal2 -gt 0) {
-                Log "RTD: Recovered after reset -- Equities_RT!B5 = $cellVal2"
-                $rtdHealthy = $true
-            } else {
-                Log "RTD: Still dead after reset -- Equities_RT!B5 = '$cellVal2'. Manual intervention needed."
-            }
-        } catch {
-            Log "RTD: ResetAll() failed -- $($_.Exception.Message)"
-        }
-    }
-
-    [System.Runtime.InteropServices.Marshal]::ReleaseComObject($xl) | Out-Null
-} catch {
-    Log "RTD: Could not connect to Excel -- $($_.Exception.Message)"
-}
-
-# --- 4. FischerDaily Scheduler Daemon ---
-# Replaces the old NennerEngine dashboard.py scheduler.
-# Handles: email parsing, stock reports, Fischer scans, auto-cancel,
-#          settlement, refresh polling, Nenner watchdog, daily close/vol.
-$fdVenv = "E:\Workspace\FischerDaily\.venv\Scripts\python.exe"
-$fdProc = Get-Process -Name "python*" -ErrorAction SilentlyContinue |
-    Where-Object {
-        try {
-            $cmdLine = (Get-CimInstance Win32_Process -Filter "ProcessId=$($_.Id)").CommandLine
-            $cmdLine -match "fischer_daily.*--monitor"
-        } catch { $false }
-    }
-
-if ($fdProc) {
-    Log "FischerDaily: Monitor already running (PID $($fdProc.Id))"
-} else {
-    Log "FischerDaily: Launching --monitor daemon..."
-    Start-Process -FilePath $fdVenv -ArgumentList "-m fischer_daily --monitor" -WorkingDirectory "E:\Workspace\FischerDaily" -WindowStyle Minimized
-    Start-Sleep -Seconds 5
-    Log "FischerDaily: Monitor launched"
-}
+# DataCenter, FischerDaily monitor, and NennerDashboard are now separate
+# scheduled tasks at 8:15, 8:25, and 8:30 AM ET respectively.
 
 Log "=== Morning startup complete ==="

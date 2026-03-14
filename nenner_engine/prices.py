@@ -248,7 +248,6 @@ _INSTRUMENT_NAME_MAP: dict[str, str] = {
 
 # Session-level T1 state: once we detect the workbook isn't open,
 # we disable T1 for the rest of this process and send one email.
-_t1_disabled_for_session: bool = False
 _t1_email_sent: bool = False
 
 
@@ -594,10 +593,6 @@ def read_t1_prices() -> dict[str, float]:
     Returns:
         {canonical_ticker: price} dict. Empty dict if workbook unavailable.
     """
-    global _t1_disabled_for_session
-    if _t1_disabled_for_session:
-        return {}
-
     try:
         import xlwings as xw
     except ImportError:
@@ -605,9 +600,7 @@ def read_t1_prices() -> dict[str, float]:
         return {}
 
     if not _is_workbook_open():
-        log.info("T1 workbook not open — disabling T1 for this session")
-        _t1_disabled_for_session = True
-        _send_t1_open_email()
+        log.debug("T1 workbook not open")
         return {}
 
     # Workbook IS already open — connect by filename only to avoid

@@ -31,8 +31,9 @@ from nenner_engine.trade_stats import compute_instrument_stats
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "nenner_signals.db")
 POSITIONS_WORKBOOK = r"E:\Workspace\DataCenter\Nenner_Positions.xlsm"
 WATCHLIST_ROW1 = ["TSLA", "BAC", "MSFT", "AAPL", "GOOG", "NVDA"]
-WATCHLIST_ROW2 = ["GC", "SI", "SLV", "SOYB"]
-WATCHLIST_TICKERS = WATCHLIST_ROW1 + WATCHLIST_ROW2
+WATCHLIST_ROW2 = ["NEM", "GDXJ", "GLD", "SLV", "SOYB"]
+WATCHLIST_ROW3 = ["ES", "NQ", "GBTC", "ETHE"]
+WATCHLIST_TICKERS = WATCHLIST_ROW1 + WATCHLIST_ROW2 + WATCHLIST_ROW3
 REFRESH_INTERVAL_MS = 30_000  # 30 seconds
 
 # Email scheduler singleton (initialized in main())
@@ -314,7 +315,7 @@ def make_watchlist_card(row):
                          style={"fontSize": "0.75rem", "color": "#666", "marginTop": "0.2rem"}),
             ], style={"backgroundColor": "#1e2226"}),
         ], className="h-100", style={"border": "1px solid #444"}),
-        xs=12, sm=6, md=4, lg=True,
+        xs=12, sm=6, md=2, lg=2,
         className="mb-3",
     )
 
@@ -697,12 +698,12 @@ def refresh_dashboard(_n, _btn):
     stats = fetch_db_stats()
     stats_bar = make_stats_bar(stats)
 
-    # Watchlist cards – split into two rows
+    # Watchlist cards – single flowing grid, 6 per row
     wl = fetch_watchlist()
     wl_by_ticker = {r.get("ticker"): r for r in wl}
-    wl_row1 = [make_watchlist_card(wl_by_ticker[t]) for t in WATCHLIST_ROW1 if t in wl_by_ticker]
-    wl_row2 = [make_watchlist_card(wl_by_ticker[t]) for t in WATCHLIST_ROW2 if t in wl_by_ticker]
-    wl_cards = html.Div([dbc.Row(wl_row1, className="mb-2"), dbc.Row(wl_row2)])
+    wl_all = [make_watchlist_card(wl_by_ticker[t])
+              for t in WATCHLIST_TICKERS if t in wl_by_ticker]
+    wl_cards = dbc.Row(wl_all)
 
     # Position cards
     pos_data = fetch_positions()
