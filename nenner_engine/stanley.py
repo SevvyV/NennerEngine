@@ -75,13 +75,17 @@ def list_knowledge(conn: sqlite3.Connection) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 def store_brief(conn: sqlite3.Connection, brief_text: str,
-                email_id: Optional[int] = None) -> int:
-    """Store a generated brief in stanley_briefs table. Returns the brief ID."""
+                email_id: Optional[int] = None) -> Optional[int]:
+    """Store a generated brief in stanley_briefs table. Returns the brief ID,
+    or None if a brief for this email_id already exists."""
     cur = conn.execute(
-        "INSERT INTO stanley_briefs (email_id, brief_text) VALUES (?, ?)",
+        "INSERT OR IGNORE INTO stanley_briefs (email_id, brief_text) VALUES (?, ?)",
         (email_id, brief_text)
     )
     conn.commit()
+    if cur.rowcount == 0:
+        log.info(f"Stanley dedup: brief for email_id={email_id} already stored, skipping")
+        return None
     return cur.lastrowid
 
 
@@ -476,11 +480,15 @@ def generate_morning_brief(
     # 5. Call LLM
     brief = _call_stanley_llm(system_prompt, user_message, api_key)
 
-    # 6. Store brief
+    # 6. Store brief (returns None if duplicate — skip sending)
     try:
-        store_brief(conn, brief, email_id)
+        brief_id = store_brief(conn, brief, email_id)
     except Exception as e:
         log.error(f"Failed to store Stanley brief: {e}")
+        brief_id = None
+
+    if brief_id is None:
+        return ""
 
     # 7. Send via email
     try:

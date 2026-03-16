@@ -363,6 +363,7 @@ class EmailScheduler:
         self._last_interval_check: Optional[datetime] = None
         self._last_result: Optional[dict] = None
         self._lock = threading.Lock()
+        self._check_lock = threading.Lock()  # serialise _do_check across threads
 
         # Track auto-cancel: date string of last run
         self._last_auto_cancel_date: Optional[str] = None
@@ -381,18 +382,24 @@ class EmailScheduler:
             self._last_result = result
 
     def _do_check(self, reason: str) -> dict:
-        """Execute an email check and store the result."""
-        log.info(f"Email scheduler: triggered ({reason})")
-        result = run_email_check(
-            self.db_path,
-            skip_brief_for_email_id=self._last_stanley_brief_email_id,
-        )
-        # Track the email_id we just sent a brief for
-        if result.get("brief_email_id"):
-            self._last_stanley_brief_email_id = result["brief_email_id"]
-        result["trigger"] = reason
-        self._set_result(result)
-        return result
+        """Execute an email check and store the result.
+
+        Serialised via _check_lock so that concurrent calls (e.g. manual
+        refresh button + interval timer) cannot both generate a brief for
+        the same email.
+        """
+        with self._check_lock:
+            log.info(f"Email scheduler: triggered ({reason})")
+            result = run_email_check(
+                self.db_path,
+                skip_brief_for_email_id=self._last_stanley_brief_email_id,
+            )
+            # Track the email_id we just sent a brief for
+            if result.get("brief_email_id"):
+                self._last_stanley_brief_email_id = result["brief_email_id"]
+            result["trigger"] = reason
+            self._set_result(result)
+            return result
 
     def _check_stock_report(self, now_et: datetime):
         """Check if it's time to send Stanley's Daily Stock Report (once per day)."""

@@ -303,6 +303,8 @@ def migrate_db(conn: sqlite3.Connection):
            SET tickers = 'AAPL,AMZN,AVGO,GOOGL,IWM,META,MSFT,NVDA,QQQ,TSLA,GLD,MSTR,SLV,SPY,TLT,UNG,USO',
                share_alloc = '{"AAPL":1800,"AMZN":2100,"AVGO":2200,"GOOGL":1600,"IWM":2200,"META":700,"MSFT":1200,"NVDA":2800,"QQQ":900,"TSLA":1200,"GLD":1800,"MSTR":1400,"SLV":16000,"SPY":800,"TLT":5500,"UNG":20000,"USO":6000}'
            WHERE portfolio_name = 'fischer_daily'""",
+        # v15: Prevent duplicate Stanley briefs for the same email
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_stanley_briefs_email_unique ON stanley_briefs(email_id) WHERE email_id IS NOT NULL",
     ]
     for sql in migrations:
         try:
