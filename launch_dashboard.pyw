@@ -130,37 +130,24 @@ if not os.path.exists(python_exe):
 log_file = open(LOG_PATH, "a", encoding="utf-8")
 
 try:
-    # 1. Start the dashboard server
+    # Single process: dashboard.py now hosts both the web UI and the
+    # background monitor threads (alert evaluator + email scheduler).
     dashboard_proc = subprocess.Popen(
-        [python_exe, "dashboard.py"],
+        [python_exe, "dashboard.py", "--db", DB_PATH],
         stdout=log_file,
         stderr=log_file,
     )
 
-    # 2. Start the alert monitor (Telegram only, no toast)
-    monitor_proc = subprocess.Popen(
-        [
-            python_exe, "-m", "nenner_engine",
-            "--monitor",
-            "--interval", "60",
-            "--db", DB_PATH,
-        ],
-        stdout=log_file,
-        stderr=log_file,
-    )
-
-    # Assign children to Job Object — if this launcher dies, they die too
+    # Assign to Job Object — if this launcher dies, the dashboard dies too
     if job:
         assign_to_job(job, dashboard_proc)
-        assign_to_job(job, monitor_proc)
 
     # Give the server a moment to start, then open browser
     time.sleep(3)
     webbrowser.open(f"http://127.0.0.1:{PORT}")
 
-    # Block until the dashboard exits, then clean up the monitor
+    # Block until the dashboard exits
     dashboard_proc.wait()
-    monitor_proc.terminate()
 
 finally:
     log_file.close()

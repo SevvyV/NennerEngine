@@ -10,12 +10,17 @@ Provides a unified interface for the dashboard and CLI.
 
 import logging
 import sqlite3
+import threading
 from datetime import datetime, date, timedelta
 from typing import Optional
 
 from .config import T1_WORKBOOK
 
 log = logging.getLogger("nenner")
+
+# Serialise all COM/xlwings calls so concurrent threads (dashboard callbacks,
+# alert monitor, email scheduler) don't issue overlapping RPC calls to Excel.
+_com_lock = threading.Lock()
 
 
 # ---------------------------------------------------------------------------
@@ -590,6 +595,9 @@ def read_t1_prices() -> dict[str, float]:
     If the workbook is not already open, sends a one-time email notification
     and disables T1 for the rest of this session (no auto-launch of Excel).
 
+    Thread-safe: all COM calls are serialised via _com_lock so concurrent
+    threads (dashboard UI, alert monitor, email scheduler) don't collide.
+
     Returns:
         {canonical_ticker: price} dict. Empty dict if workbook unavailable.
     """
@@ -603,6 +611,17 @@ def read_t1_prices() -> dict[str, float]:
         log.debug("T1 workbook not open")
         return {}
 
+    # Serialise all COM calls — multiple threads may call read_t1_prices()
+    # concurrently (dashboard UI refresh, alert monitor, email scheduler).
+    _com_lock.acquire()
+    try:
+        return _read_t1_prices_locked(xw)
+    finally:
+        _com_lock.release()
+
+
+def _read_t1_prices_locked(xw) -> dict[str, float]:
+    """Inner implementation — caller must hold _com_lock."""
     # Workbook IS already open — connect by filename only to avoid
     # OneDrive path mismatch (Excel reports OneDrive path, we have local).
     import os
@@ -692,7 +711,7 @@ def store_t1_prices(conn: sqlite3.Connection, prices: dict[str, float] | None = 
             conn.execute("""
                 INSERT OR REPLACE INTO price_history
                     (ticker, date, close, source)
-                VALUES (?, ?, ?, 'xlwings')
+                VALUES (?, ?, ?, 'T1')
             """, (ticker, today, price_val))
         except sqlite3.Error as e:
             log.debug(f"DB insert error for T1 {ticker}: {e}")

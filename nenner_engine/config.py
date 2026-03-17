@@ -25,9 +25,14 @@ LLM_MAX_TOKENS_STANLEY = 4096
 LLM_RETRY_ATTEMPTS = 2
 
 # ── Schedule (Eastern Time) ────────────────────────────────────
-DAILY_CHECK_HOUR, DAILY_CHECK_MINUTE = 8, 0
+DAILY_CHECK_HOUR, DAILY_CHECK_MINUTE = 8, 35
 INTERVAL_WINDOW_START = 8
 INTERVAL_WINDOW_END = 11
-STOCK_REPORT_HOUR, STOCK_REPORT_MINUTE = 7, 0
+STOCK_REPORT_HOUR, STOCK_REPORT_MINUTE = 8, 30
 AUTO_CANCEL_HOUR, AUTO_CANCEL_MINUTE = 16, 30
 SCHEDULER_TICK_SECONDS = 30
+
+# ── Nenner Watchdog ───────────────────────────────────────────
+# Nenner sends emails Mon/Wed/Fri. Alert if none parsed by noon ET.
+NENNER_EXPECTED_DAYS = {0, 2, 4}  # Monday, Wednesday, Friday
+WATCHDOG_HOUR, WATCHDOG_MINUTE = 12, 0

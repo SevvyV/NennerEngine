@@ -111,7 +111,7 @@ if ($t1Check) {
     Log "T1: FAILED -- not running after both attempts. Sign in manually."
 }
 
-# DataCenter, FischerDaily monitor, and NennerDashboard are now separate
+# DataCenter, FischerDaily Monitor, and NennerEngine are separate
 # scheduled tasks at 8:15, 8:25, and 8:30 AM ET respectively.
 
 Log "=== Morning startup complete ==="

@@ -23,6 +23,7 @@ from .config import (
     STOCK_REPORT_HOUR, STOCK_REPORT_MINUTE,
     AUTO_CANCEL_HOUR, AUTO_CANCEL_MINUTE,
     SCHEDULER_TICK_SECONDS,
+    NENNER_EXPECTED_DAYS, WATCHDOG_HOUR, WATCHDOG_MINUTE,
 )
 
 log = logging.getLogger("nenner")
@@ -371,6 +372,8 @@ class EmailScheduler:
         self._last_stock_report_date: Optional[str] = None
         # Track Stanley brief: email_id of last brief sent
         self._last_stanley_brief_email_id: Optional[int] = None
+        # Track watchdog: date string of last run
+        self._last_watchdog_date: Optional[str] = None
 
     @property
     def last_result(self) -> Optional[dict]:
@@ -453,6 +456,49 @@ class EmailScheduler:
             )
             _send_stock_report(self.db_path)
 
+    def _check_nenner_watchdog(self, now_et: datetime):
+        """Alert if no Nenner email was parsed today (noon on Mon/Wed/Fri)."""
+        if now_et.weekday() not in NENNER_EXPECTED_DAYS:
+            return
+        if not (now_et.hour == WATCHDOG_HOUR
+                and WATCHDOG_MINUTE <= now_et.minute < WATCHDOG_MINUTE + 5):
+            return
+        today_str = now_et.strftime("%Y-%m-%d")
+        if self._last_watchdog_date == today_str:
+            return
+
+        self._last_watchdog_date = today_str
+
+        from .db import init_db
+        conn = init_db(self.db_path)
+        try:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM emails WHERE date_sent = ?", (today_str,)
+            ).fetchone()
+            email_count = row[0] if row else 0
+        finally:
+            conn.close()
+
+        if email_count > 0:
+            log.info(f"Nenner watchdog: {email_count} email(s) parsed today — all clear")
+            return
+
+        log.warning("Nenner watchdog: no emails parsed today")
+        try:
+            from .alert_dispatch import send_telegram, get_telegram_config
+            tg = get_telegram_config()
+            if tg and tg[0]:
+                day_name = now_et.strftime("%A")
+                msg = (
+                    "\u26a0\ufe0f NENNER WATCHDOG\n"
+                    f"No Nenner email parsed as of noon on {day_name} {today_str}.\n\n"
+                    "Expected delivery on Mon/Wed/Fri by noon ET. "
+                    "Please check Gmail inbox manually."
+                )
+                send_telegram(msg, tg[0], tg[1])
+        except Exception as e:
+            log.error(f"Nenner watchdog Telegram alert failed: {e}")
+
     def _run(self):
         """Main scheduler loop."""
         # --- Startup check ---
@@ -507,6 +553,9 @@ class EmailScheduler:
 
                 # Auto-cancel: 4:30 PM ET daily after close
                 self._check_auto_cancel(now_et)
+
+                # Nenner watchdog: noon on Mon/Wed/Fri
+                self._check_nenner_watchdog(now_et)
 
             except Exception as e:
                 log.error(f"Email scheduler loop error: {e}", exc_info=True)

@@ -24,6 +24,7 @@ Adding a new alert type:
 import logging
 import signal as signal_mod
 import sqlite3
+import threading
 import time
 from datetime import datetime, timedelta, time as dt_time
 from typing import Optional
@@ -312,7 +313,99 @@ def show_alert_history(conn: sqlite3.Connection, limit: int = 50):
 
 
 # ---------------------------------------------------------------------------
-# Monitor Daemon
+# Alert Monitor Thread (used by dashboard single-process mode)
+# ---------------------------------------------------------------------------
+
+class AlertMonitorThread:
+    """Daemon thread that runs the alert evaluation loop.
+
+    Polls prices every `interval` seconds, runs all registered evaluators,
+    dispatches alerts via cooldown tracker. Opens its own DB connection
+    for thread safety.
+    """
+
+    def __init__(self, db_path: str, interval: int = 60,
+                 config: Optional[AlertConfig] = None):
+        self.db_path = db_path
+        self.interval = interval
+        self.config = config or AlertConfig()
+        self._stop_event = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+
+    def _run(self):
+        from .db import init_db, migrate_db
+        from .prices import get_prices_with_signal_context
+
+        conn = init_db(self.db_path)
+        migrate_db(conn)
+
+        cooldown_tracker: dict[tuple[str, str], datetime] = {}
+        custom_alert_reset_date: Optional[str] = None
+        check_count = 0
+
+        log.info(f"AlertMonitorThread started. Interval={self.interval}s, "
+                 f"evaluators={len(_evaluators)}")
+
+        while not self._stop_event.is_set():
+            try:
+                check_count += 1
+                now = datetime.now()
+
+                rows = get_prices_with_signal_context(conn, try_t1=True)
+                price_by_ticker = {
+                    r["ticker"]: r.get("price")
+                    for r in rows if r.get("price")
+                }
+
+                # Reset custom alert fired flags once per trading day
+                today_iso = now.date().isoformat()
+                if custom_alert_reset_date != today_iso:
+                    conn.execute(
+                        "UPDATE custom_price_alerts "
+                        "SET fired_above = 0, fired_below = 0 "
+                        "WHERE active = 1"
+                    )
+                    conn.commit()
+                    custom_alert_reset_date = today_iso
+                    log.info("Custom price alerts reset for new trading day")
+
+                # Run all registered evaluators
+                all_alerts = []
+                for evaluator in _evaluators:
+                    try:
+                        all_alerts.extend(evaluator(conn, price_by_ticker))
+                    except Exception as e:
+                        log.error(f"Evaluator {evaluator.__name__} failed: {e}",
+                                  exc_info=True)
+
+                for alert in all_alerts:
+                    dispatch_alert(alert, cooldown_tracker, conn, self.config)
+
+            except Exception as e:
+                log.error(f"AlertMonitorThread error: {e}", exc_info=True)
+
+            self._stop_event.wait(timeout=self.interval)
+
+        conn.close()
+        log.info(f"AlertMonitorThread stopped after {check_count} checks")
+
+    def start(self):
+        if self._thread and self._thread.is_alive():
+            return
+        self._stop_event.clear()
+        self._thread = threading.Thread(
+            target=self._run, name="AlertMonitor", daemon=True,
+        )
+        self._thread.start()
+
+    def stop(self):
+        self._stop_event.set()
+        if self._thread:
+            self._thread.join(timeout=30)
+
+
+# ---------------------------------------------------------------------------
+# Monitor Daemon (CLI entry point — blocks on main thread)
 # ---------------------------------------------------------------------------
 
 def run_monitor(conn: sqlite3.Connection, interval: int = 60,

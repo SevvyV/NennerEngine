@@ -4,20 +4,31 @@ Nenner Signal Dashboard
 Plotly Dash dashboard for monitoring Nenner cycle research signals.
 Run: python dashboard.py [--port PORT] [--db PATH]
 
-Automatically checks for new Nenner emails:
-  - On dashboard startup (immediate)
-  - Every 30 minutes from 8:00–11:00 AM Eastern Time
-  - On manual refresh button click
+Single-process architecture: the dashboard hosts the Dash web UI AND runs
+the background monitor threads (alert evaluator + email scheduler) in the
+same process. This ensures COM/xlwings access to T1 prices (requires an
+interactive Windows session) and eliminates the fragile multi-process
+launcher that previously ran dashboard + monitor as separate subprocesses.
+
+Background threads started at boot:
+  - AlertMonitorThread (60s): reads T1 prices, evaluates cancel proximity
+    and custom price alerts, dispatches via Telegram
+  - EmailScheduler (30s tick): checks for new Nenner emails, sends stock
+    reports at 8:30 AM, runs auto-cancel at 4:30 PM, Nenner watchdog at noon
 
 Signal export:
-  - Writes NennerSignals sheet in Nenner_Positions.xlsm on every refresh for trade blotter linking
+  - Writes NennerSignals sheet in Nenner_Positions.xlsm on every refresh
+    for trade blotter linking
 """
 
 import argparse
+import logging
 import os
 import sqlite3
 
 import dash
+
+log = logging.getLogger("nenner_engine")
 from dash import dash_table, dcc, html
 import dash_bootstrap_components as dbc
 from dash.dependencies import Input, Output
@@ -36,8 +47,6 @@ WATCHLIST_ROW3 = ["ES", "NQ", "GBTC", "ETHE"]
 WATCHLIST_TICKERS = WATCHLIST_ROW1 + WATCHLIST_ROW2 + WATCHLIST_ROW3
 REFRESH_INTERVAL_MS = 30_000  # 30 seconds
 
-# Email scheduler singleton (initialized in main())
-_email_scheduler = None
 
 # Color palette
 COLOR_BUY = "#00bc8c"     # green
@@ -168,6 +177,7 @@ def fetch_watchlist():
         conn.close()
         return rows
     except Exception as e:
+        log.error("fetch_watchlist price enrichment failed: %s", e, exc_info=True)
         # Fallback: signal-only (no prices)
         conn = get_db()
         placeholders = ",".join("?" for _ in WATCHLIST_TICKERS)
@@ -685,15 +695,6 @@ app.layout = build_layout
     Input("refresh-button", "n_clicks"),
 )
 def refresh_dashboard(_n, _btn):
-    # Trigger email check on manual refresh button click
-    ctx = dash.callback_context
-    if ctx.triggered and ctx.triggered[0]["prop_id"] == "refresh-button.n_clicks":
-        if _email_scheduler and _btn:
-            try:
-                _email_scheduler.trigger_now()
-            except Exception as e:
-                print(f"Warning: Manual email check failed: {e}")
-
     # Stats
     stats = fetch_db_stats()
     stats_bar = make_stats_bar(stats)
@@ -839,24 +840,6 @@ def refresh_dashboard(_n, _btn):
         f"Auto-refresh: {REFRESH_INTERVAL_MS // 1000}s",
     ]
 
-    # Add email scheduler status
-    if _email_scheduler and _email_scheduler.last_result:
-        er = _email_scheduler.last_result
-        ts = er.get("timestamp", "?")
-        try:
-            ts_short = datetime.fromisoformat(ts).strftime("%H:%M:%S")
-        except Exception:
-            ts_short = ts
-        trigger = er.get("trigger", "?")
-        new_ct = er.get("new_emails", 0)
-        err = er.get("error")
-        if err:
-            footer_parts.append(f"Email check: ERROR at {ts_short}")
-        else:
-            footer_parts.append(
-                f"Email check: {new_ct} new @ {ts_short} ({trigger})"
-            )
-
     footer = "  |  ".join(footer_parts)
 
     # Export signals to Excel for trade blotter linking
@@ -877,44 +860,41 @@ def main():
     parser.add_argument("--port", type=int, default=8050, help="Port (default: 8050)")
     parser.add_argument("--db", type=str, default=None, help="Database path")
     parser.add_argument("--debug", action="store_true", help="Debug mode")
-    parser.add_argument("--no-email-check", action="store_true",
-                        help="Disable automatic email checking")
     args = parser.parse_args()
 
     if args.db:
         global DB_PATH
         DB_PATH = args.db
 
-    # --- Start email scheduler (checks on launch + daily at 8 AM ET) ---
-    # Guard against Werkzeug reloader: in debug mode, main() runs in BOTH
-    # the parent (reloader) and child (worker) processes.  Only start the
-    # scheduler in the worker to avoid duplicate briefs and emails.
-    import os
-    is_reloader_parent = args.debug and os.environ.get("WERKZEUG_RUN_MAIN") != "true"
-
-    global _email_scheduler
-    if not args.no_email_check and not is_reloader_parent:
-        try:
-            from nenner_engine.email_scheduler import EmailScheduler
-            _email_scheduler = EmailScheduler(
-                db_path=DB_PATH,
-                check_on_start=True,
-                daily_check=True,
-                interval_minutes=30,
-                interval_window=(8, 11),  # 8:00-11:00 AM ET
-            )
-            _email_scheduler.start()
-            print("Email scheduler started (on launch + every 30min 8-11AM ET + manual refresh)")
-        except Exception as e:
-            print(f"Warning: Email scheduler failed to start: {e}")
-            print("Dashboard will run without automatic email checking.")
-    elif is_reloader_parent:
-        print("Email scheduler deferred to worker process (debug reloader)")
-    else:
-        print("Email checking disabled (--no-email-check)")
+    # Configure logging for monitor threads (logger "nenner" used by all NE modules)
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
 
     print(f"Starting Nenner Signal Dashboard on http://127.0.0.1:{args.port}")
     print(f"Database: {DB_PATH}")
+
+    # Start background monitor threads (alert evaluator + email scheduler).
+    # Only in non-debug mode — Werkzeug's reloader forks a child process
+    # and we don't want duplicate threads.
+    if not args.debug or os.environ.get("WERKZEUG_RUN_MAIN") == "true":
+        from nenner_engine.alerts import AlertMonitorThread, AlertConfig
+        from nenner_engine.email_scheduler import EmailScheduler
+
+        alert_monitor = AlertMonitorThread(
+            db_path=DB_PATH, interval=60, config=AlertConfig(),
+        )
+        alert_monitor.start()
+        log.info("Alert monitor thread started (60s interval)")
+
+        email_sched = EmailScheduler(
+            db_path=DB_PATH, check_on_start=True, daily_check=True,
+        )
+        email_sched.start()
+        log.info("Email scheduler thread started")
+
     app.run(debug=args.debug, port=args.port)
 
 

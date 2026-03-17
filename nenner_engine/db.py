@@ -304,13 +304,17 @@ def migrate_db(conn: sqlite3.Connection):
                share_alloc = '{"AAPL":1800,"AMZN":2100,"AVGO":2200,"GOOGL":1600,"IWM":2200,"META":700,"MSFT":1200,"NVDA":2800,"QQQ":900,"TSLA":1200,"GLD":1800,"MSTR":1400,"SLV":16000,"SPY":800,"TLT":5500,"UNG":20000,"USO":6000}'
            WHERE portfolio_name = 'fischer_daily'""",
         # v15: Prevent duplicate Stanley briefs for the same email
+        # First, remove duplicates keeping the latest brief per email_id
+        """DELETE FROM stanley_briefs WHERE id NOT IN (
+            SELECT MAX(id) FROM stanley_briefs WHERE email_id IS NOT NULL GROUP BY email_id
+        ) AND email_id IS NOT NULL""",
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_stanley_briefs_email_unique ON stanley_briefs(email_id) WHERE email_id IS NOT NULL",
     ]
     for sql in migrations:
         try:
             conn.execute(sql)
-        except sqlite3.OperationalError:
-            pass  # Already exists
+        except (sqlite3.OperationalError, sqlite3.IntegrityError):
+            pass  # Already applied or constraint conflict
     # Create views (idempotent)
     try:
         conn.execute("""
