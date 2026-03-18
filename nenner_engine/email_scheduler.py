@@ -501,16 +501,16 @@ class EmailScheduler:
 
     def _run(self):
         """Main scheduler loop."""
-        # --- Startup check ---
-        if self.check_on_start:
-            self._do_check("startup")
-
-        # --- Startup stock report catch-up (if we missed 7 AM) ---
-        self._startup_stock_report_catchup()
-
-        # --- Startup auto-cancel catchup (covers missed days) ---
-        log.info("Auto-cancel: running startup catchup")
-        _run_auto_cancel_catchup(self.db_path)
+        # --- Startup tasks (wrapped so a failure doesn't kill the thread) ---
+        try:
+            if self.check_on_start:
+                self._do_check("startup")
+            self._startup_stock_report_catchup()
+            log.info("Auto-cancel: running startup catchup")
+            _run_auto_cancel_catchup(self.db_path)
+        except Exception as e:
+            log.error(f"Email scheduler startup error (continuing to main loop): {e}",
+                      exc_info=True)
 
         # --- Loop for daily and interval checks ---
         while not self._stop_event.is_set():
