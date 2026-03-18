@@ -678,6 +678,33 @@ app = dash.Dash(
 
 app.layout = build_layout
 
+# ---------------------------------------------------------------------------
+# Health endpoint — returns thread status for external watchdog
+# ---------------------------------------------------------------------------
+
+# Module-level refs set by main() so the health endpoint can inspect them
+_alert_monitor = None
+_email_sched = None
+
+
+@app.server.route("/health")
+def health():
+    """Return JSON thread health for the external watchdog."""
+    import json
+    from flask import Response
+
+    threads = {}
+    if _alert_monitor and hasattr(_alert_monitor, "_thread"):
+        threads["alert_monitor"] = _alert_monitor._thread.is_alive() if _alert_monitor._thread else False
+    if _email_sched and hasattr(_email_sched, "_thread"):
+        threads["email_scheduler"] = _email_sched._thread.is_alive() if _email_sched._thread else False
+
+    all_healthy = all(threads.values()) if threads else True
+    status_code = 200 if all_healthy else 503
+
+    body = json.dumps({"healthy": all_healthy, "threads": threads})
+    return Response(body, status=status_code, content_type="application/json")
+
 
 # ---------------------------------------------------------------------------
 # Callbacks
@@ -879,21 +906,33 @@ def main():
     # Start background monitor threads (alert evaluator + email scheduler).
     # Only in non-debug mode — Werkzeug's reloader forks a child process
     # and we don't want duplicate threads.
+    global _alert_monitor, _email_sched
+
     if not args.debug or os.environ.get("WERKZEUG_RUN_MAIN") == "true":
+        import atexit
         from nenner_engine.alerts import AlertMonitorThread, AlertConfig
         from nenner_engine.email_scheduler import EmailScheduler
 
-        alert_monitor = AlertMonitorThread(
+        _alert_monitor = AlertMonitorThread(
             db_path=DB_PATH, interval=60, config=AlertConfig(),
         )
-        alert_monitor.start()
+        _alert_monitor.start()
         log.info("Alert monitor thread started (60s interval)")
 
-        email_sched = EmailScheduler(
+        _email_sched = EmailScheduler(
             db_path=DB_PATH, check_on_start=True, daily_check=True,
         )
-        email_sched.start()
+        _email_sched.start()
         log.info("Email scheduler thread started")
+
+        def _shutdown():
+            log.info("Dashboard shutting down — stopping background threads")
+            if _alert_monitor:
+                _alert_monitor.stop()
+            if _email_sched:
+                _email_sched.stop()
+
+        atexit.register(_shutdown)
 
     app.run(debug=args.debug, port=args.port)
 
