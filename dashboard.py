@@ -321,6 +321,15 @@ def make_watchlist_card(row):
                          style={"fontSize": "0.85rem", "color": COLOR_HEADER}),
                 html.Div(cancel_text,
                          style={"fontSize": "0.8rem", "color": "#888"}),
+                # --- Price target ---
+                html.Div(
+                    f"Target {row['target_price']:,.2f} ({row['target_dist_pct']:+.1f}%)"
+                    if row.get("target_price") and row.get("target_dist_pct") is not None
+                    else f"Target {row['target_price']:,.2f}"
+                    if row.get("target_price")
+                    else "",
+                    style={"fontSize": "0.8rem", "color": "#5bc0de"}
+                ),
                 html.Div(row.get("last_signal_date", ""),
                          style={"fontSize": "0.75rem", "color": "#666", "marginTop": "0.2rem"}),
             ], style={"backgroundColor": "#1e2226"}),

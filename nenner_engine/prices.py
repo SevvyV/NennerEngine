@@ -895,6 +895,27 @@ def get_prices_with_signal_context(conn: sqlite3.Connection,
     # Fetch prices
     prices = get_current_prices(conn, signal_tickers, try_t1=try_t1)
 
+    # Fetch latest unreached price targets per ticker+direction
+    targets_by_ticker: dict[str, list[dict]] = {}
+    if signal_tickers:
+        ph = ",".join("?" for _ in signal_tickers)
+        target_rows = conn.execute(f"""
+            SELECT pt.ticker, pt.target_price, pt.direction
+            FROM price_targets pt
+            INNER JOIN (
+                SELECT ticker, direction, MAX(date) AS max_date
+                FROM price_targets
+                WHERE ticker IN ({ph}) AND reached = 0
+                GROUP BY ticker, direction
+            ) latest ON pt.ticker = latest.ticker
+                    AND pt.direction = latest.direction
+                    AND pt.date = latest.max_date
+            WHERE pt.reached = 0
+            ORDER BY pt.ticker, pt.target_price
+        """, signal_tickers).fetchall()
+        for tr in target_rows:
+            targets_by_ticker.setdefault(tr["ticker"], []).append(dict(tr))
+
     # Enrich each signal row with price data
     enriched = []
     for row in rows:
@@ -945,6 +966,24 @@ def get_prices_with_signal_context(conn: sqlite3.Connection,
             d["pnl_pct"] = None
             d["cancel_dist_pct"] = None
             d["trigger_dist_pct"] = None
+
+        # Price targets — pick the one aligned with signal direction
+        ticker_targets = targets_by_ticker.get(ticker, [])
+        sig_dir = d.get("effective_signal", "")
+        target_dir = "UPSIDE" if sig_dir == "BUY" else "DOWNSIDE" if sig_dir == "SELL" else None
+        matched = [t for t in ticker_targets if t["direction"] == target_dir] if target_dir else []
+        if matched:
+            d["target_price"] = matched[0]["target_price"]
+            d["target_direction"] = matched[0]["direction"]
+            price = d.get("price")
+            if price and price != 0 and d["target_price"]:
+                d["target_dist_pct"] = (d["target_price"] - price) / abs(price) * 100
+            else:
+                d["target_dist_pct"] = None
+        else:
+            d["target_price"] = None
+            d["target_direction"] = None
+            d["target_dist_pct"] = None
 
         enriched.append(d)
 
