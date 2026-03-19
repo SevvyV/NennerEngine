@@ -42,7 +42,7 @@ from nenner_engine.trade_stats import compute_instrument_stats
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "nenner_signals.db")
 POSITIONS_WORKBOOK = r"E:\Workspace\DataCenter\Nenner_Positions.xlsm"
 WATCHLIST_ROW1 = ["TSLA", "BAC", "MSFT", "AAPL", "GOOG", "NVDA"]
-WATCHLIST_ROW2 = ["NEM", "GDXJ", "GLD", "SLV", "SOYB"]
+WATCHLIST_ROW2 = ["NEM", "GDXJ", "GLD", "SLV", "UNG", "SOYB"]
 WATCHLIST_ROW3 = ["ES", "NQ", "GBTC", "ETHE"]
 WATCHLIST_TICKERS = WATCHLIST_ROW1 + WATCHLIST_ROW2 + WATCHLIST_ROW3
 REFRESH_INTERVAL_MS = 30_000  # 30 seconds

@@ -165,6 +165,134 @@ def _gather_cycles(conn: sqlite3.Connection, tickers: set) -> dict:
     return result
 
 
+def _gather_market_snapshot(conn: sqlite3.Connection) -> dict:
+    """Gather current prices, daily changes, and cancel proximity.
+
+    Returns dict with 'movers' (|change| >= 3%), 'all' rows, and 'as_of' date.
+    """
+    # Current prices (latest per ticker, prefer T1)
+    current = {}
+    rows = conn.execute(
+        "SELECT ticker, close, date, source FROM price_history p "
+        "INNER JOIN (SELECT ticker AS t, MAX(date) AS d FROM price_history GROUP BY ticker) m "
+        "ON p.ticker = m.t AND p.date = m.d "
+        "ORDER BY p.ticker, CASE WHEN p.source = 'T1' THEN 0 ELSE 1 END"
+    ).fetchall()
+    for r in rows:
+        t = r["ticker"] if hasattr(r, "keys") else r[0]
+        if t not in current:
+            current[t] = {
+                "price": r["close"] if hasattr(r, "keys") else r[1],
+                "date": r["date"] if hasattr(r, "keys") else r[2],
+            }
+
+    if not current:
+        return {"movers": [], "all": [], "as_of": "N/A"}
+
+    as_of = max(v["date"] for v in current.values())
+
+    # Prior close (most recent date before current date, per ticker)
+    prior = {}
+    for ticker, info in current.items():
+        row = conn.execute(
+            "SELECT close FROM price_history "
+            "WHERE ticker = ? AND date < ? ORDER BY date DESC LIMIT 1",
+            (ticker, info["date"]),
+        ).fetchone()
+        if row:
+            prior[ticker] = row["close"] if hasattr(row, "keys") else row[0]
+
+    # Signal state for cancel proximity
+    signals = {}
+    for r in conn.execute(
+        "SELECT ticker, effective_signal, cancel_level FROM current_state"
+    ).fetchall():
+        t = r["ticker"] if hasattr(r, "keys") else r[0]
+        signals[t] = {
+            "signal": r["effective_signal"] if hasattr(r, "keys") else r[1],
+            "cancel": r["cancel_level"] if hasattr(r, "keys") else r[2],
+        }
+
+    # Build snapshot rows
+    all_rows = []
+    for ticker, info in current.items():
+        price = info["price"]
+        if not price:
+            continue
+        prior_close = prior.get(ticker)
+        change_pct = ((price - prior_close) / prior_close * 100) if prior_close else None
+
+        sig = signals.get(ticker, {})
+        cancel = sig.get("cancel")
+        cancel_dist = ((cancel - price) / price * 100) if (cancel and price) else None
+
+        all_rows.append({
+            "ticker": ticker,
+            "price": price,
+            "change_pct": change_pct,
+            "signal": sig.get("signal", "—"),
+            "cancel": cancel,
+            "cancel_dist_pct": cancel_dist,
+        })
+
+    # Sort by |change| descending
+    all_rows.sort(key=lambda r: abs(r["change_pct"] or 0), reverse=True)
+    movers = [r for r in all_rows if r["change_pct"] is not None and abs(r["change_pct"]) >= 3.0]
+
+    return {"movers": movers, "all": all_rows, "as_of": as_of}
+
+
+def _format_market_snapshot(snapshot: dict) -> str:
+    """Format market snapshot as compact text for the system prompt."""
+    if not snapshot["all"]:
+        return "(No price data available)"
+
+    lines = []
+
+    # Movers section
+    if snapshot["movers"]:
+        lines.append("MOVERS (>3% daily change):")
+        for r in snapshot["movers"]:
+            chg = f"{r['change_pct']:+.1f}%"
+            cancel_str = ""
+            if r["cancel"] and r["cancel_dist_pct"] is not None:
+                cancel_str = f" | cancel {r['cancel']:.2f} ({r['cancel_dist_pct']:+.1f}% away)"
+            lines.append(f"  {r['ticker']} {chg} @ {r['price']:.2f} | {r['signal']}{cancel_str}")
+        lines.append("")
+    else:
+        lines.append("No major movers today (all <3%).")
+        lines.append("")
+
+    # Cancel proximity alerts
+    danger = [r for r in snapshot["all"]
+              if r["cancel_dist_pct"] is not None and abs(r["cancel_dist_pct"]) < 0.2]
+    if danger:
+        lines.append("CANCEL PROXIMITY (<0.2% away):")
+        for r in danger:
+            chg = f"{r['change_pct']:+.1f}%" if r["change_pct"] is not None else "N/A"
+            lines.append(
+                f"  {r['ticker']} @ {r['price']:.2f} ({chg}) | {r['signal']} "
+                f"cancel {r['cancel']:.2f} ({r['cancel_dist_pct']:+.1f}%)"
+            )
+        lines.append("")
+
+    # Compact full snapshot (top 25 by |change|, then summary)
+    lines.append("Ticker | Price | Chg% | Signal | Cancel | Dist%")
+    shown = 0
+    for r in snapshot["all"]:
+        if shown >= 25:
+            remaining = len(snapshot["all"]) - shown
+            lines.append(f"... plus {remaining} more instruments")
+            break
+        chg = f"{r['change_pct']:+.1f}%" if r["change_pct"] is not None else "—"
+        cancel = f"{r['cancel']:.2f}" if r["cancel"] else "—"
+        dist = f"{r['cancel_dist_pct']:+.1f}%" if r["cancel_dist_pct"] is not None else "—"
+        lines.append(f"{r['ticker']} | {r['price']:.2f} | {chg} | {r['signal']} | {cancel} | {dist}")
+        shown += 1
+
+    return "\n".join(lines)
+
+
 def _extract_mentioned_tickers(changes: list, parsed_signals: dict) -> set:
     """Extract tickers mentioned in changes and parsed signals."""
     tickers = set()
@@ -207,6 +335,13 @@ not directly change signals.
 ## Current Portfolio State
 {current_state}
 
+## Market Snapshot (prices as of {snapshot_date})
+{market_snapshot}
+
+IMPORTANT: If there are significant movers (>3% daily change), lead your \
+"Top 3 Things That Matter Today" with price action. Flag any instrument \
+approaching its cancel level (<0.2% away) — these are potential signal flips.
+
 ## Trade Statistics (historical performance)
 {trade_stats}
 
@@ -220,7 +355,7 @@ not directly change signals.
 You MUST output plain markdown. NEVER use HTML tags (<b>, <i>, <br>, etc.). \
 Use markdown syntax only: ## for headers, **bold**, *italic*, - for bullets.
 
-## Stanley's Brief — [today's date]
+## Stanley's Brief — {today_date}
 
 ## Top 3 Things That Matter Today
 Numbered list of the most important takeaways.
@@ -348,15 +483,21 @@ def _build_stanley_system_prompt(
     trade_stats: dict,
     recent_signals: dict,
     cycles: dict,
+    market_snapshot: dict | None = None,
     mentioned_tickers: Optional[set] = None,
 ) -> str:
     """Build the full system prompt with injected context."""
+    snapshot_text = _format_market_snapshot(market_snapshot) if market_snapshot else "(No price data)"
+    snapshot_date = market_snapshot["as_of"] if market_snapshot else "N/A"
     return STANLEY_SYSTEM_PROMPT.format(
         knowledge_base=_format_knowledge(knowledge),
         current_state=_format_current_state(current_state),
+        market_snapshot=snapshot_text,
+        snapshot_date=snapshot_date,
         trade_stats=_format_trade_stats(trade_stats, highlight=mentioned_tickers),
         recent_signals=_format_recent_signals(recent_signals),
         cycle_data=_format_cycles(cycles),
+        today_date=datetime.now().strftime("%B %d, %Y"),
     )
 
 
@@ -459,10 +600,12 @@ def generate_morning_brief(
     recent_signals = _gather_recent_signals(conn, mentioned_tickers)
     cycles = _gather_cycles(conn, mentioned_tickers)
     knowledge = get_knowledge_base(conn)
+    market_snapshot = _gather_market_snapshot(conn)
 
     # 3. Build system prompt
     system_prompt = _build_stanley_system_prompt(
         knowledge, current_state, trade_stats, recent_signals, cycles,
+        market_snapshot=market_snapshot,
         mentioned_tickers=mentioned_tickers,
     )
 

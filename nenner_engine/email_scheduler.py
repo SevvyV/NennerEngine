@@ -140,14 +140,15 @@ def _send_stock_report(db_path: str):
             conn.close()
             return
 
+        generate_and_send_stock_report(conn, db_path)
+
+        # Mark as sent AFTER successful generation+send
         conn.execute(
             "INSERT INTO alert_log (ticker, alert_type, severity, message) "
             "VALUES ('ALL', 'stock_report', 'info', ?)",
             (f"Stock report sent {today_str}",),
         )
         conn.commit()
-
-        generate_and_send_stock_report(conn, db_path)
         conn.close()
 
     except Exception as e:
@@ -290,7 +291,15 @@ def run_email_check(db_path: str,
                     raw_text = latest_email["raw_text"]
 
                     # Skip if we already sent a brief for this email
-                    if email_id == skip_brief_for_email_id:
+                    # Check both in-memory tracker AND database for cross-restart dedup
+                    already_sent = email_id == skip_brief_for_email_id
+                    if not already_sent:
+                        existing = conn.execute(
+                            "SELECT 1 FROM stanley_briefs WHERE email_id = ? LIMIT 1",
+                            (email_id,),
+                        ).fetchone()
+                        already_sent = existing is not None
+                    if already_sent:
                         log.info(f"Stanley brief dedup: skipping email_id={email_id} (already sent)")
                     else:
                         sigs = conn.execute(

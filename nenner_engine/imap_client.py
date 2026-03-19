@@ -16,6 +16,7 @@ from pathlib import Path
 from .parser import classify_email, extract_text_from_email
 from .llm_parser import parse_email_signals_llm
 from .db import store_email, store_parsed_results
+from .anomaly_check import check_signal_anomalies, alert_anomalies
 
 from .config import NENNER_SENDER, IMAP_SERVER
 
@@ -161,6 +162,11 @@ def process_email(conn, msg, source_id: str = None) -> bool:
 
     # Parse signals via LLM
     results = parse_email_signals_llm(body, email_date, email_id)
+
+    # Check for anomalous values (potential typos) before storing
+    anomalies = check_signal_anomalies(conn, results.get("signals", []))
+    if anomalies:
+        alert_anomalies(anomalies)
 
     # Store results
     store_parsed_results(conn, results, email_id)

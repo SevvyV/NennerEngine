@@ -108,12 +108,46 @@ def assign_to_job(job, process):
         kernel32.CloseHandle(handle)
 
 
+def _kill_stale_dashboard():
+    """Kill any orphaned dashboard.py still listening on PORT.
+
+    The mutex guards the launcher, not the dashboard child. If the launcher
+    dies uncleanly (crash, reboot, taskkill /F), the Job Object handle leaks
+    and dashboard.py survives as an orphan. Next launch creates a duplicate.
+    This function checks if PORT is already in use and kills the holder.
+    """
+    import socket
+    try:
+        sock = socket.create_connection(("127.0.0.1", PORT), timeout=2)
+        sock.close()
+    except OSError:
+        return  # Port not in use — no stale process
+
+    # Port is listening — find the PID via netstat
+    try:
+        out = subprocess.check_output(
+            ["netstat", "-ano"], text=True, timeout=5,
+        )
+        for line in out.splitlines():
+            if f":{PORT}" in line and "LISTENING" in line:
+                pid_str = line.strip().split()[-1]
+                pid = int(pid_str)
+                subprocess.run(["taskkill", "/F", "/PID", str(pid)], timeout=5)
+                time.sleep(2)
+                return
+    except Exception:
+        pass
+
+
 # --- Singleton check ---
 mutex = acquire_mutex(MUTEX_NAME)
 if mutex is None:
     # Another instance is already running — just open the browser and exit
     webbrowser.open(f"http://127.0.0.1:{PORT}")
     sys.exit(0)
+
+# --- Kill any orphaned dashboard from a prior crash/reboot ---
+_kill_stale_dashboard()
 
 # --- Job Object for automatic child cleanup ---
 job = create_job_object()
