@@ -123,6 +123,14 @@ def setup_logging(log_path: str):
         ],
     )
 
+    try:
+        from nenner_engine.error_ledger import CentralErrorHandler
+        logging.getLogger("nenner").addHandler(
+            CentralErrorHandler(source="NENNER", package_prefix="nenner"),
+        )
+    except Exception:
+        logging.getLogger("nenner").warning("Error ledger unavailable — continuing without it")
+
 
 def main():
     # Determine paths relative to project root (parent of this package)

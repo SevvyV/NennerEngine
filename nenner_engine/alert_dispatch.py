@@ -77,8 +77,18 @@ def get_telegram_config() -> tuple[Optional[str], Optional[str]]:
 # Notification Channels
 # ---------------------------------------------------------------------------
 
-def send_telegram(message: str, bot_token: str, chat_id: str) -> bool:
-    """Send a Telegram message via Bot API (HTTP POST, stdlib only)."""
+def send_telegram(message: str, bot_token: str, chat_id: str,
+                   log_to_ledger: bool = True) -> bool:
+    """Send a Telegram message via Bot API (HTTP POST, stdlib only).
+
+    Args:
+        log_to_ledger: If True (default), also write to the central error ledger.
+            Set to False for routine notifications that are not system errors.
+    """
+    if log_to_ledger:
+        from nenner_engine.error_ledger import log_alert
+        log_alert("NENNER", message)
+
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
     payload = urllib.parse.urlencode({
         "chat_id": chat_id,
@@ -130,7 +140,7 @@ def notify_fischer_refresh(sender_email: str) -> bool:
         log.debug("Fischer refresh notification skipped — Telegram not configured")
         return False
     msg = f"<b>Fischer Refresh</b>\n{sender_email} requested a refresh of the Fischer Daily Report"
-    return send_telegram(msg, token, chat_id)
+    return send_telegram(msg, token, chat_id, log_to_ledger=False)
 
 
 # ---------------------------------------------------------------------------
