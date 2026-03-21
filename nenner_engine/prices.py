@@ -900,6 +900,9 @@ def get_prices_with_signal_context(conn: sqlite3.Connection,
     if signal_tickers:
         ph = ",".join("?" for _ in signal_tickers)
         target_rows = conn.execute(f"""
+            WITH recent_emails AS (
+                SELECT id FROM emails ORDER BY date_sent DESC, id DESC LIMIT 5
+            )
             SELECT pt.ticker, pt.target_price, pt.direction
             FROM price_targets pt
             INNER JOIN (
@@ -911,6 +914,11 @@ def get_prices_with_signal_context(conn: sqlite3.Connection,
                     AND pt.direction = latest.direction
                     AND pt.date = latest.max_date
             WHERE pt.reached = 0
+            AND EXISTS (
+                SELECT 1 FROM price_targets pt2
+                WHERE pt2.ticker = pt.ticker
+                  AND pt2.email_id IN (SELECT id FROM recent_emails)
+            )
             ORDER BY pt.ticker, pt.target_price
         """, signal_tickers).fetchall()
         for tr in target_rows:

@@ -95,8 +95,18 @@ def _count_ntc(conn: sqlite3.Connection, ticker: str, days: int = 30) -> int:
 def _get_latest_target(conn: sqlite3.Connection, ticker: str) -> Optional[dict]:
     """Get the most recent price target for a ticker."""
     row = conn.execute(
-        "SELECT target_price, direction, condition FROM price_targets "
-        "WHERE ticker = ? ORDER BY date DESC, id DESC LIMIT 1",
+        "WITH recent_emails AS ("
+        "  SELECT id FROM emails ORDER BY date_sent DESC, id DESC LIMIT 5"
+        ") "
+        "SELECT pt.target_price, pt.direction, pt.condition "
+        "FROM price_targets pt "
+        "WHERE pt.ticker = ? "
+        "  AND EXISTS ("
+        "    SELECT 1 FROM price_targets pt2"
+        "    WHERE pt2.ticker = pt.ticker"
+        "      AND pt2.email_id IN (SELECT id FROM recent_emails)"
+        "  ) "
+        "ORDER BY pt.date DESC, pt.id DESC LIMIT 1",
         (ticker,)
     ).fetchone()
     return dict(row) if row else None
@@ -176,11 +186,19 @@ def _get_target_progression(conn: sqlite3.Connection, ticker: str,
     This captures Nenner's staircase pattern: target reached → new target set.
     """
     rows = conn.execute(
-        "SELECT date, target_price, direction, condition, raw_text "
-        "FROM price_targets "
-        "WHERE ticker = ? AND date >= date('now', ?) "
-        "AND target_price IS NOT NULL "
-        "ORDER BY date ASC, id ASC",
+        "WITH recent_emails AS ("
+        "  SELECT id FROM emails ORDER BY date_sent DESC, id DESC LIMIT 5"
+        ") "
+        "SELECT pt.date, pt.target_price, pt.direction, pt.condition, pt.raw_text "
+        "FROM price_targets pt "
+        "WHERE pt.ticker = ? AND pt.date >= date('now', ?) "
+        "AND pt.target_price IS NOT NULL "
+        "AND EXISTS ("
+        "  SELECT 1 FROM price_targets pt2"
+        "  WHERE pt2.ticker = pt.ticker"
+        "    AND pt2.email_id IN (SELECT id FROM recent_emails)"
+        ") "
+        "ORDER BY pt.date ASC, pt.id ASC",
         (ticker, f'-{days} days')
     ).fetchall()
 
