@@ -2056,22 +2056,16 @@ class TestStockReportGeneration(unittest.TestCase):
         self.assertIsNotNone(aapl["pnl_pct"])
         self.assertIsNotNone(aapl["cancel_dist_pct"])
 
-    @patch("nenner_engine.prices._is_workbook_open", return_value=False)
     @patch("nenner_engine.prices.fetch_yfinance_daily")
     @patch("nenner_engine.stock_report._generate_stanley_take")
     @patch("nenner_engine.stock_report.send_email")
     @patch("nenner_engine.llm_parser._get_cached_api_key")
-    def test_full_report_flow(self, mock_key, mock_send, mock_llm, mock_yf, mock_wb):
+    def test_full_report_flow(self, mock_key, mock_send, mock_llm, mock_yf):
         """Full report generation: gather, LLM, HTML, send."""
         mock_key.return_value = "test-key"
         mock_yf.return_value = {}
         mock_llm.return_value = "<b>Stanley says hold TSLA</b>"
         mock_send.return_value = True
-
-        # Reset T1 session state so _send_t1_open_email doesn't fire
-        import nenner_engine.prices as _prices
-        _prices._t1_disabled_for_session = True  # already disabled = skip email
-        _prices._t1_email_sent = False
 
         html = generate_and_send_stock_report(
             self.conn, ":memory:", send_email_flag=True, include_llm=True

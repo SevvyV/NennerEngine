@@ -1,9 +1,8 @@
 """
 Price Data Layer
 =================
-Fetches, caches, and serves price data from two sources:
-  1. yFinance — daily OHLC closes for all instruments (batch download)
-  2. xlwings / T1 (LSEG) — real-time quotes via RTD formulas in Excel
+Fetches, caches, and serves price data from yFinance with a TTL cache
+to avoid excessive API calls.
 
 Provides a unified interface for the dashboard and CLI.
 """
@@ -11,16 +10,17 @@ Provides a unified interface for the dashboard and CLI.
 import logging
 import sqlite3
 import threading
+import time
 from datetime import datetime, date, timedelta
 from typing import Optional
 
-from .config import T1_WORKBOOK
-
 log = logging.getLogger("nenner")
 
-# Serialise all COM/xlwings calls so concurrent threads (dashboard callbacks,
-# alert monitor, email scheduler) don't issue overlapping RPC calls to Excel.
-_com_lock = threading.Lock()
+# TTL cache for yFinance prices — avoids hitting the API every 30s
+_yf_cache: dict[str, float] = {}
+_yf_cache_time: float = 0.0
+_yf_cache_lock = threading.Lock()
+_YF_CACHE_TTL = 300  # 5 minutes
 
 
 # ---------------------------------------------------------------------------
@@ -106,154 +106,6 @@ YFINANCE_MAP: dict[str, str | None] = {
 _YF_REVERSE = {v: k for k, v in YFINANCE_MAP.items() if v is not None}
 
 
-# ---------------------------------------------------------------------------
-# Ticker Mapping: Canonical → LSEG RIC (for T1 Excel RTD)
-# ---------------------------------------------------------------------------
-# Futures month codes: F=Jan G=Feb H=Mar J=Apr K=May M=Jun
-#                      N=Jul Q=Aug U=Sep V=Oct X=Nov Z=Dec
-# /1 = front-month continuous contract
-
-LSEG_RIC_MAP: dict[str, str | None] = {
-    # Equity Indices (futures)
-    "ES":       "ES/1",
-    "NQ":       "NQ/1-CM,USD,NORM",
-    "YM":       "D./1",                 # Dow Jones mini uses "D." as the LSEG root
-    # Equity Indices (cash index) — corrected to user's T1 entitlements
-    "NYFANG":   "NYFANG-P",
-    "VIX":      "VIX-UT",               # #NT/FND — not in current entitlements
-    "TSX":      "T.TOR-T,CAD,NORM,D",
-    "DAX":      "DAX-XE",
-    "FTSE":     "UKX-FT",
-    "AEX":      "AEX-AE,EUR,NORM,D",
-    "NYA":      "NYA-P,USD,NORM,D",
-    "SMI":      "SLA1YN-ST,CHF,NORM,D",
-    "BTK":      "BTK-P",
-    # Precious Metals (futures)
-    "GC":       "GC/1",
-    "SI":       "SI/1",
-    "HG":       "HG/1",
-    # Precious Metals (ETF / Stock — same ticker on LSEG)
-    "GLD":      "GLD",
-    "GDXJ":     "GDXJ",
-    "NEM":      "NEM",
-    "SLV":      "SLV",
-    # Energy (futures)
-    "CL":       "CL/1",
-    "NG":       "NG/1",
-    # Energy (ETFs)
-    "USO":      "USO",
-    "UNG":      "UNG",
-    # Agriculture (futures) — updated to match Nenner_DataCenter RICs
-    "ZC":       "ZG/1",
-    "ZS":       "ZK/1",
-    "ZW":       "ZW/H26",       # contract-specific — needs manual roll
-    "LBS":      "LBR/1",
-    # Agriculture (ETFs)
-    "CORN":     "CORN",
-    "SOYB":     "SOYB",
-    "WEAT":     "WEAT",
-    # Fixed Income (futures) — US/1 and FGBL/1 are #NT/FND
-    "ZB":       "US/1",
-    "ZN":       "ZN/1-CB,USD,NORM,D",
-    # Fixed Income (ETF)
-    "TLT":      "TLT",
-    # Fixed Income (Europe)
-    "FGBL":     "FGBL/1",
-    # Currencies — all use =-FX suffix
-    "DXY":      "NYICDX-P",
-    "EUR/USD":  "EUR=-FX",
-    "FXE":      "FXE",
-    "AUD/USD":  "AUD=-FX",
-    "USD/CAD":  "CAD=-FX",
-    "USD/JPY":  "JPY=-FX",
-    "USD/CHF":  "CHF=-FX",
-    "GBP/USD":  "GBP=-FX",
-    "USD/BRL":  "BRL=-FX",
-    "USD/ILS":  "ILS=-FX",
-    # Crypto — use =-FX suffix
-    "BTC":      "BTC=-FX",
-    "ETH":      "ETH=-FX",
-    # Crypto ETFs
-    "GBTC":     "GBTC",
-    "ETHE":     "ETHE",
-    "BITO":     "BITO",
-    # Single Stocks & ETFs
-    "AAPL":     "AAPL",
-    "AMZN":     "AMZN",
-    "AVGO":     "AVGO",
-    "GOOG":     "GOOG",
-    "GOOGL":    "GOOGL",
-    "BAC":      "BAC",
-    "IWM":      "IWM",
-    "META":     "META",
-    "MSFT":     "MSFT",
-    "MSTR":     "MSTR",
-    "NVDA":     "NVDA",
-    "TSLA":     "TSLA",
-    "QQQ":      "QQQ",
-    "SIL":      "SIL",
-}
-
-# Reverse lookup: LSEG RIC → canonical ticker
-_RIC_REVERSE = {v: k for k, v in LSEG_RIC_MAP.items() if v is not None}
-
-
-# ---------------------------------------------------------------------------
-# T1 / xlwings Configuration
-# ---------------------------------------------------------------------------
-
-# Two-sheet layout in Nenner_DataCenter.xlsm:
-#   Equities_RT    — stocks & ETFs  (col A = ticker, B = BID, E = LAST)
-#   Futures_FX_RT  — futures, FX, indices, crypto, agriculture
-#                    (col A = instrument name, B = RIC, C = BID, E = LAST)
-T1_SHEETS: dict[str, dict] = {
-    "Equities_RT": {
-        "ticker_col": "A",     # Column A = ticker symbol (TSLA, AAPL, etc.)
-        "ric_col": None,       # No RIC column — ticker IS the identifier
-        "bid_col": "B",        # BID price
-        "last_col": "E",       # LAST price (fallback when BID empty/zero)
-        "data_start_row": 5,
-    },
-    "Futures_FX_RT": {
-        "ticker_col": "A",    # Column A = instrument name (human-readable)
-        "ric_col": "B",       # Column B = LSEG RIC
-        "bid_col": "C",       # BID price
-        "last_col": "E",      # LAST price (fallback when BID empty/zero)
-        "data_start_row": 5,
-    },
-}
-
-# Section headers in Futures_FX_RT to skip (these are labels, not data rows).
-# When we hit one, we also skip the column-header row below it.
-_SECTION_HEADERS = {
-    "FUTURES", "FOREIGN EXCHANGE", "INDICES", "CRYPTO & AGRICULTURE",
-    "Instrument",  # column header row
-    "REAL-TIME FUTURES, FX & INDICES",  # sheet title
-    "REAL-TIME EQUITY & ETF QUOTES",    # sheet title
-}
-
-# Instrument name → canonical ticker for Futures_FX_RT rows where
-# column A is a human-readable name and the RIC doesn't reverse-map.
-_INSTRUMENT_NAME_MAP: dict[str, str] = {
-    "Nasdaq 100 E-mini": "NQ",
-    "S&P 500 E-mini": "ES",
-    "Dow E-mini": "YM",
-    "Gold Futures": "GC",
-    "Silver Futures": "SI",
-    "Copper Futures": "HG",
-    "Crude Oil WTI": "CL",
-    "Natural Gas": "NG",
-    "US Treasury Bond": "ZB",
-    "10-Year T-Note": "ZN",
-    "30-Year T-Bond": "ZB",
-    "US Dollar Index Futures": "DXY",
-    "Bitcoin (BTC)": "BTC",
-    "Ethereum (ETH)": "ETH",
-}
-
-# Session-level T1 state: once we detect the workbook isn't open,
-# we disable T1 for the rest of this process and send one email.
-_t1_email_sent: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -438,385 +290,67 @@ def backfill_yfinance(conn: sqlite3.Connection,
     return fetch_yfinance_daily(conn, tickers=tickers, period=period)
 
 
-# ---------------------------------------------------------------------------
-# xlwings / T1 Bridge
-# ---------------------------------------------------------------------------
-
-def _is_workbook_open() -> bool:
-    """Check if T1_WORKBOOK is already open in a running Excel instance.
-
-    Compares by filename only (not full path) because OneDrive sync
-    can cause the Excel-reported path to differ from the local path.
-
-    Iterates through running Excel apps without launching a new one.
-    Returns False if xlwings isn't installed or no Excel is running.
-    """
-    import os
-    target_name = os.path.basename(T1_WORKBOOK).lower()
-    try:
-        import xlwings as xw
-        for app in xw.apps:
-            for wb in app.books:
-                if wb.name.lower() == target_name:
-                    return True
-    except Exception:
-        pass
-    return False
-
-
-def _send_t1_open_email():
-    """Send a one-time email asking user to open the T1 workbook.
-
-    Deduped at two levels:
-      1. Module-level _t1_email_sent flag (per-process)
-      2. alert_log DB table (cross-process, once per day)
-    """
-    global _t1_email_sent
-    if _t1_email_sent:
-        return
-    _t1_email_sent = True  # set early to prevent retries on failure
-
-    # DB-level dedup: only one "please open" email per day across all processes
-    try:
-        from .config import DEFAULT_DB_PATH
-        from .db import init_db
-        import datetime
-        conn = init_db(DEFAULT_DB_PATH)
-        today_str = datetime.date.today().isoformat()
-        already = conn.execute(
-            "SELECT 1 FROM alert_log WHERE alert_type = 't1_workbook_open' "
-            "AND created_at >= ? LIMIT 1",
-            (today_str,),
-        ).fetchone()
-        if already:
-            log.info("T1 open-workbook email already sent today (another process), skipping")
-            conn.close()
-            return
-        conn.execute(
-            "INSERT INTO alert_log (ticker, alert_type, severity, message) "
-            "VALUES ('ALL', 't1_workbook_open', 'info', ?)",
-            (f"T1 workbook open email sent {today_str}",),
-        )
-        conn.commit()
-        conn.close()
-    except Exception as e:
-        log.warning(f"T1 open-email DB dedup check failed (sending anyway): {e}")
-
-    try:
-        from .postmaster import send_email
-        send_email(
-            "NennerEngine: Please open Nenner_DataCenter.xlsm",
-            "<p>NennerEngine tried to read T1 live prices but the workbook "
-            "is not open in Excel.</p>"
-            f"<p>Please open: <b>{T1_WORKBOOK}</b></p>"
-            "<p>T1 price fetching is disabled for this session. "
-            "Restart the engine after opening the workbook to re-enable "
-            "live prices.</p>",
-        )
-        log.info("Sent email notification: T1 workbook not open")
-    except Exception as e:
-        log.error(f"Failed to send T1 open-workbook email: {e}")
-
-
-def _resolve_ticker(col_a: str, col_b: str | None) -> str | None:
-    """Resolve canonical ticker from a spreadsheet row.
-
-    Tries these strategies in order:
-      1. Direct match — col_a IS a canonical ticker (Equities_RT tickers,
-         FX pairs like "EUR/USD", indices like "VIX", "DXY", etc.)
-      2. RIC reverse — col_b maps via _RIC_REVERSE
-      3. Parenthetical — extract from "Corn Futures (ZC)" → ZC
-      4. Instrument name — col_a maps via _INSTRUMENT_NAME_MAP
-
-    Returns canonical ticker string, or None if unresolvable.
-    """
-    import re
-
-    # 1. Direct: col_a is itself a known canonical ticker
-    if col_a in LSEG_RIC_MAP:
-        return col_a
-
-    # 2. RIC reverse lookup
-    if col_b:
-        ric = str(col_b).strip()
-        canonical = _RIC_REVERSE.get(ric)
-        if canonical:
-            return canonical
-
-    # 3. Parenthetical: "Corn Futures (ZC)" → ZC
-    m = re.search(r"\(([A-Z/]+)\)", col_a)
-    if m:
-        candidate = m.group(1)
-        if candidate in LSEG_RIC_MAP:
-            return candidate
-
-    # 4. Instrument name fallback
-    return _INSTRUMENT_NAME_MAP.get(col_a)
-
-
-def _extract_price(ws, row: int, bid_col: str, last_col: str) -> float | None:
-    """Read price from BID column, falling back to LAST.
-
-    Filters out RTD error values (#N/A, #NT/FND), zero, and None.
-    Returns a valid float price, or None if no usable price.
-    """
-    for col in (bid_col, last_col):
-        val = ws.range(f"{col}{row}").value
-        if val is None:
-            continue
-        if isinstance(val, str):
-            # RTD error strings like "#N/A", "#NT/FND"
-            if val.startswith("#"):
-                continue
-            val = val.strip()
-            if not val:
-                continue
-        try:
-            price = float(val)
-            if price > 0:
-                return price
-        except (ValueError, TypeError):
-            continue
-    return None
-
-
-def read_t1_prices() -> dict[str, float]:
-    """Read real-time prices from Nenner_DataCenter.xlsm via xlwings.
-
-    Reads two sheets:
-      - Equities_RT:    col A = ticker, col B = BID, col E = LAST
-      - Futures_FX_RT:  col A = instrument name, col B = RIC,
-                        col C = BID, col E = LAST
-
-    For each row, resolves the canonical ticker (direct match, RIC reverse,
-    parenthetical extraction, or instrument name map) and extracts the price
-    (BID preferred, LAST as fallback for indices/FX without streaming BID).
-
-    If the workbook is not already open, sends a one-time email notification
-    and disables T1 for the rest of this session (no auto-launch of Excel).
-
-    Thread-safe: all COM calls are serialised via _com_lock so concurrent
-    threads (dashboard UI, alert monitor, email scheduler) don't collide.
-
-    Returns:
-        {canonical_ticker: price} dict. Empty dict if workbook unavailable.
-    """
-    try:
-        import xlwings as xw
-    except ImportError:
-        log.debug("xlwings not installed — T1 bridge unavailable")
-        return {}
-
-    if not _is_workbook_open():
-        log.debug("T1 workbook not open")
-        return {}
-
-    # Serialise all COM calls — multiple threads may call read_t1_prices()
-    # concurrently (dashboard UI refresh, alert monitor, email scheduler).
-    _com_lock.acquire()
-    try:
-        return _read_t1_prices_locked(xw)
-    finally:
-        _com_lock.release()
-
-
-def _read_t1_prices_locked(xw) -> dict[str, float]:
-    """Inner implementation — caller must hold _com_lock."""
-    # Workbook IS already open — connect by filename only to avoid
-    # OneDrive path mismatch (Excel reports OneDrive path, we have local).
-    import os
-    wb_name = os.path.basename(T1_WORKBOOK)
-    try:
-        wb = xw.Book(wb_name)
-    except Exception as e:
-        log.debug(f"Cannot connect to T1 workbook '{wb_name}': {e}")
-        return {}
-
-    prices: dict[str, float] = {}
-
-    for sheet_name, cfg in T1_SHEETS.items():
-        try:
-            ws = wb.sheets[sheet_name]
-        except Exception:
-            log.warning(f"T1 sheet '{sheet_name}' not found, skipping")
-            continue
-
-        row = cfg["data_start_row"]
-        max_row = 200  # safety limit
-        consecutive_empty = 0
-
-        while row < max_row:
-            col_a = ws.range(f'{cfg["ticker_col"]}{row}').value
-
-            if col_a is None:
-                consecutive_empty += 1
-                # Stop after 5 consecutive empty rows (end of data)
-                if consecutive_empty >= 5:
-                    break
-                row += 1
-                continue
-            consecutive_empty = 0
-
-            col_a = str(col_a).strip()
-
-            # Skip section headers and column labels
-            if col_a in _SECTION_HEADERS:
-                row += 1
-                continue
-
-            # Read RIC if this sheet has one
-            col_b = None
-            if cfg["ric_col"]:
-                raw_b = ws.range(f'{cfg["ric_col"]}{row}').value
-                if raw_b is not None:
-                    col_b = str(raw_b).strip() or None
-
-            # Resolve canonical ticker
-            ticker = _resolve_ticker(col_a, col_b)
-            if not ticker:
-                log.debug(f"T1: unmapped row {sheet_name}!{row}: "
-                          f"A={col_a!r} B={col_b!r}")
-                row += 1
-                continue
-
-            # Extract price (BID → LAST fallback)
-            price = _extract_price(
-                ws, row, cfg["bid_col"], cfg["last_col"]
-            )
-            if price is not None and ticker not in prices:
-                prices[ticker] = price
-
-            row += 1
-
-    log.info(f"T1 xlwings: read {len(prices)} live prices "
-             f"from {len(T1_SHEETS)} sheets")
-    return prices
-
-
-def store_t1_prices(conn: sqlite3.Connection, prices: dict[str, float] | None = None):
-    """Read T1 prices and store them in price_history.
-
-    Args:
-        conn: SQLite connection.
-        prices: Pre-fetched T1 prices, or None to read fresh.
-    """
-    if prices is None:
-        prices = read_t1_prices()
-    if not prices:
-        return
-
-    today = date.today().isoformat()
-    for ticker, price_val in prices.items():
-        try:
-            conn.execute("""
-                INSERT OR REPLACE INTO price_history
-                    (ticker, date, close, source)
-                VALUES (?, ?, ?, 'T1')
-            """, (ticker, today, price_val))
-        except sqlite3.Error as e:
-            log.debug(f"DB insert error for T1 {ticker}: {e}")
-    conn.commit()
-    log.info(f"Stored {len(prices)} T1 prices")
-
-
-def setup_t1_sheet():
-    """Populate the Nenner_Stock sheet with all instruments and RTD formulas.
-
-    Writes LSEG RIC codes to column B and RTD BID formulas to column C.
-    Organizes instruments by asset class with section headers.
-    """
-    try:
-        import xlwings as xw
-    except ImportError:
-        log.error("xlwings not installed — cannot set up T1 sheet")
-        return
-
-    try:
-        wb = xw.Book(T1_WORKBOOK)
-        ws = wb.sheets[T1_SHEET]
-    except Exception as e:
-        log.error(f"Cannot open T1 workbook: {e}")
-        return
-
-    # Define the instrument layout grouped by asset class
-    from .instruments import INSTRUMENT_MAP
-
-    sections = [
-        ("Single Stocks", [
-            ("AAPL", "AAPL"), ("GOOG", "GOOG"), ("BAC", "BAC"),
-            ("MSFT", "MSFT"), ("NVDA", "NVDA"), ("TSLA", "TSLA"),
-            ("NEM", "NEM"),
-        ]),
-        ("Precious Metals", [
-            ("GC", "GC/1"), ("SI", "SI/1"), ("HG", "HG/1"),
-            ("GLD", "GLD"), ("GDXJ", "GDXJ"), ("SLV", "SLV"),
-        ]),
-        ("Energy", [
-            ("CL", "CL/1"), ("NG", "NG/1"),
-            ("USO", "USO"), ("UNG", "UNG"),
-        ]),
-        ("Equity Indices", [
-            ("ES", "ES/1"), ("NQ", "NQ/1"), ("YM", "D./1"),
-            ("VIX", ".VIX"), ("DXY", "DXY.N"),
-            ("DAX", ".GDAXI"), ("FTSE", ".FTSE"),
-            ("TSX", ".GSPTSE"), ("AEX", ".AEX"),
-            ("NYA", ".NYA"), ("SMI", ".SSMI"),
-            ("BTK", ".BTK"), ("NYFANG", ".NYFANG"),
-        ]),
-        ("Agriculture", [
-            ("ZC", "C./1"), ("ZS", "S./1"), ("ZW", "W./1"), ("LBS", "LBS/1"),
-            ("CORN", "CORN"), ("SOYB", "SOYB"), ("WEAT", "WEAT"),
-        ]),
-        ("Fixed Income", [
-            ("ZB", "US/1"), ("ZN", "TY/1"), ("FGBL", "FGBL/1"),
-            ("TLT", "TLT"),
-        ]),
-        ("Currencies", [
-            ("EUR/USD", "EUR="), ("GBP/USD", "GBP="),
-            ("USD/JPY", "JPY="), ("USD/CHF", "CHF="),
-            ("AUD/USD", "AUD="), ("USD/CAD", "CAD="),
-            ("USD/BRL", "BRL="), ("USD/ILS", "ILS="),
-            ("FXE", "FXE"),
-        ]),
-        ("Crypto", [
-            ("BTC", "BTC="), ("ETH", "ETH="),
-            ("GBTC", "GBTC"), ("ETHE", "ETHE"), ("BITO", "BITO"),
-        ]),
-    ]
-
-    # Write headers (row 3-4 area)
-    ws.range("B3").value = "RIC"
-    ws.range("C3").value = "BID"
-    ws.range("D3").value = "Instrument"
-
-    row = T1_DATA_START_ROW
-    for section_name, instruments in sections:
-        # Section header
-        ws.range(f"B{row}").value = f"--- {section_name} ---"
-        ws.range(f"B{row}").font.bold = True
-        ws.range(f"B{row}").font.color = (150, 150, 150)
-        row += 1
-
-        for canonical, ric in instruments:
-            info = INSTRUMENT_MAP.get(
-                next((k for k, v in INSTRUMENT_MAP.items() if v["ticker"] == canonical), ""),
-                {"ticker": canonical}
-            )
-            ws.range(f"B{row}").value = ric
-            ws.range(f"C{row}").formula = f'=RTD("tf.rtdsvr",,"Q",$B{row},"BID")'
-            ws.range(f"D{row}").value = canonical
-            row += 1
-
-        row += 1  # blank row between sections
-
-    log.info(f"T1 sheet set up with instruments through row {row}")
-    print(f"T1 Nenner_Stock sheet populated through row {row}.")
-    print("RTD formulas will start streaming once LSEG T1 connects.")
 
 
 # ---------------------------------------------------------------------------
 # Unified Price Interface
 # ---------------------------------------------------------------------------
+
+def _fetch_yf_cached() -> dict[str, float]:
+    """Return yFinance prices, using a 5-minute TTL cache.
+
+    Thread-safe. On cache miss, fetches all mapped tickers in one batch call.
+    """
+    global _yf_cache, _yf_cache_time
+    now = time.monotonic()
+    if _yf_cache and (now - _yf_cache_time) < _YF_CACHE_TTL:
+        return _yf_cache
+
+    with _yf_cache_lock:
+        # Double-check after acquiring lock
+        if _yf_cache and (time.monotonic() - _yf_cache_time) < _YF_CACHE_TTL:
+            return _yf_cache
+
+        try:
+            import yfinance as yf
+        except ImportError:
+            log.warning("yfinance not installed")
+            return _yf_cache or {}
+
+        yf_symbols = [v for v in YFINANCE_MAP.values() if v is not None]
+        yf_to_canonical = {v: k for k, v in YFINANCE_MAP.items() if v is not None}
+
+        try:
+            df = yf.download(yf_symbols, period="1d", progress=False, threads=True)
+        except Exception as e:
+            log.error(f"yFinance batch download failed: {e}")
+            return _yf_cache or {}
+
+        if df.empty:
+            return _yf_cache or {}
+
+        prices: dict[str, float] = {}
+        if isinstance(df.columns, __import__("pandas").MultiIndex):
+            for sym in yf_symbols:
+                try:
+                    close_series = df["Close"][sym].dropna()
+                    if not close_series.empty:
+                        prices[yf_to_canonical[sym]] = float(close_series.iloc[-1])
+                except (KeyError, IndexError):
+                    pass
+        else:
+            # Single ticker
+            close_series = df["Close"].dropna()
+            if not close_series.empty and len(yf_symbols) == 1:
+                prices[yf_to_canonical[yf_symbols[0]]] = float(close_series.iloc[-1])
+
+        if prices:
+            _yf_cache = prices
+            _yf_cache_time = time.monotonic()
+            log.info(f"yFinance cache refreshed: {len(prices)} prices")
+
+        return _yf_cache
+
 
 def get_current_prices(conn: sqlite3.Connection,
                        tickers: list[str] | None = None,
@@ -824,32 +358,25 @@ def get_current_prices(conn: sqlite3.Connection,
     """Get the best available price for each ticker.
 
     Priority:
-      1. xlwings/T1 (real-time, if available and try_t1=True)
-      2. Cached in price_history (if fresh within 24h)
-      3. (Does NOT trigger yFinance fetch — that's a separate CLI/cron action)
+      1. yFinance (with 5-minute TTL cache)
+      2. Cached in price_history DB (if fresh within 48h)
+
+    The try_t1 parameter is accepted for backward compatibility but ignored.
 
     Returns:
         {ticker: {"price": float, "source": str, "as_of": str}}
     """
     result: dict[str, dict] = {}
 
-    # 1. Try T1 real-time prices
-    t1_prices: dict[str, float] = {}
-    if try_t1:
-        try:
-            t1_prices = read_t1_prices()
-            # Also cache T1 prices in DB for later use
-            if t1_prices:
-                store_t1_prices(conn, t1_prices)
-        except Exception as e:
-            log.debug(f"T1 price read failed: {e}")
-
-    for ticker, price in t1_prices.items():
+    # 1. yFinance with TTL cache
+    yf_prices = _fetch_yf_cached()
+    now_str = datetime.now().isoformat(timespec="seconds")
+    for ticker, price in yf_prices.items():
         if tickers is None or ticker in tickers:
             result[ticker] = {
                 "price": price,
-                "source": "T1",
-                "as_of": datetime.now().isoformat(timespec="seconds"),
+                "source": "yfinance",
+                "as_of": now_str,
             }
 
     # 2. Fill gaps from DB cache

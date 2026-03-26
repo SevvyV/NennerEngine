@@ -6,19 +6,16 @@ Run: python dashboard.py [--port PORT] [--db PATH]
 
 Single-process architecture: the dashboard hosts the Dash web UI AND runs
 the background monitor threads (alert evaluator + email scheduler) in the
-same process. This ensures COM/xlwings access to T1 prices (requires an
-interactive Windows session) and eliminates the fragile multi-process
-launcher that previously ran dashboard + monitor as separate subprocesses.
+same process.
 
 Background threads started at boot:
-  - AlertMonitorThread (60s): reads T1 prices, evaluates cancel proximity
-    and custom price alerts, dispatches via Telegram
+  - AlertMonitorThread (60s): reads yFinance prices (5-min TTL cache),
+    evaluates cancel proximity and custom price alerts, dispatches via Telegram
   - EmailScheduler (30s tick): checks for new Nenner emails, sends stock
     reports at 8:30 AM, runs auto-cancel at 4:30 PM, Nenner watchdog at noon
 
-Signal export:
-  - Writes NennerSignals sheet in Nenner_Positions.xlsm on every refresh
-    for trade blotter linking
+Signal data:
+  - Served via NennerEngine Signals API (port 8051) for Excel Power Query
 """
 
 import argparse
@@ -40,7 +37,6 @@ from nenner_engine.trade_stats import compute_instrument_stats
 # ---------------------------------------------------------------------------
 
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "nenner_signals.db")
-POSITIONS_WORKBOOK = r"E:\Workspace\DataCenter\Nenner_Positions.xlsm"
 WATCHLIST_ROW1 = ["TSLA", "BAC", "MSFT", "AAPL", "GOOG", "NVDA"]
 WATCHLIST_ROW2 = ["GDXJ", "GLD", "SLV", "USO", "UNG", "SOYB", "NEM"]
 WATCHLIST_ROW3 = ["ES", "NQ", "GBTC", "ETHE"]
@@ -83,78 +79,6 @@ def fetch_current_state():
     return [dict(r) for r in rows]
 
 
-def export_signals_to_excel():
-    """Export current signal state to the NennerSignals sheet in Nenner_Positions.xlsm.
-
-    Writes directly to the live Excel instance via xlwings so the data is
-    immediately available for VLOOKUP from the trade sheets.
-
-    Called on every dashboard refresh (~30s).
-    """
-    from datetime import datetime
-    try:
-        import xlwings as xw
-    except ImportError:
-        print("Warning: xlwings not installed — signal export disabled")
-        return
-
-    rows = fetch_current_state()
-    if not rows:
-        return
-
-    # Attach to the already-open workbook (don't launch Excel if not running)
-    try:
-        wb = xw.Book(POSITIONS_WORKBOOK)
-        wb.app.kill_on_close = False  # prevent Excel from dying when Python exits
-    except Exception:
-        # Workbook not open in Excel — skip silently
-        return
-
-    sheet_name = "NennerSignals"
-    if sheet_name in [s.name for s in wb.sheets]:
-        ws = wb.sheets[sheet_name]
-        ws.clear()
-    else:
-        ws = wb.sheets.add(sheet_name, after=wb.sheets[-1])
-
-    headers = [
-        "Ticker", "Instrument", "Asset Class", "Signal",
-        "Origin Price", "Cancel Direction", "Cancel Level",
-        "Trigger Level", "Implied Reversal", "Signal Date",
-    ]
-
-    # Build data rows
-    data = []
-    for r in rows:
-        data.append([
-            r["ticker"],
-            r["instrument"],
-            r["asset_class"],
-            r["effective_signal"],
-            r.get("origin_price"),
-            r.get("cancel_direction"),
-            r.get("cancel_level"),
-            r.get("trigger_level"),
-            1 if r.get("implied_reversal") else 0,
-            r.get("last_signal_date"),
-        ])
-
-    # Write headers + data in bulk
-    ws.range("A1").value = headers
-    if data:
-        ws.range("A2").value = data
-
-    # Formatting
-    ws.range("A1").expand("right").font.bold = True
-    ws.autofit("c")
-
-    # Timestamp
-    meta_row = len(data) + 3
-    ws.range(f"A{meta_row}").value = "Last Updated:"
-    ws.range(f"B{meta_row}").value = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-    # Auto-save so no work is lost if the dashboard process dies
-    wb.save()
 
 
 def fetch_recent_changes(days=7):
@@ -882,11 +806,6 @@ def refresh_dashboard(_n, _btn):
 
     footer = "  |  ".join(footer_parts)
 
-    # Export signals to Excel for trade blotter linking
-    try:
-        export_signals_to_excel()
-    except Exception as e:
-        print(f"Warning: signal export failed: {e}")
 
     return stats_bar, wl_cards, pos_cards, stocks_table, macro_table, changelog_table, footer
 

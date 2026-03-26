@@ -5,7 +5,6 @@ from pathlib import Path as _Path
 # ── Project Layout ──────────────────────────────────────────────
 PROJECT_ROOT = _Path(__file__).resolve().parent.parent
 DEFAULT_DB_PATH = str(_Path(r"E:\Workspace\DataCenter\nenner_signals.db"))
-T1_WORKBOOK = r"E:\Workspace\DataCenter\Nenner_DataCenter.xlsm"
 
 # ── Email Recipients ────────────────────────────────────────────
 REPORT_RECIPIENT = "sevagv@vartaniancapital.com"
