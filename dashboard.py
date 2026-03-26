@@ -102,9 +102,10 @@ def export_signals_to_excel():
     if not rows:
         return
 
-    # Attach to the already-open workbook
+    # Attach to the already-open workbook (don't launch Excel if not running)
     try:
         wb = xw.Book(POSITIONS_WORKBOOK)
+        wb.app.kill_on_close = False  # prevent Excel from dying when Python exits
     except Exception:
         # Workbook not open in Excel — skip silently
         return
@@ -151,6 +152,9 @@ def export_signals_to_excel():
     meta_row = len(data) + 3
     ws.range(f"A{meta_row}").value = "Last Updated:"
     ws.range(f"B{meta_row}").value = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    # Auto-save so no work is lost if the dashboard process dies
+    wb.save()
 
 
 def fetch_recent_changes(days=7):
@@ -928,11 +932,14 @@ def main():
         _alert_monitor.start()
         log.info("Alert monitor thread started (60s interval)")
 
-        _email_sched = EmailScheduler(
-            db_path=DB_PATH, check_on_start=True, daily_check=True,
-        )
-        _email_sched.start()
-        log.info("Email scheduler thread started")
+        # Email scheduler disabled in dashboard — NennerEngineMonitor owns it.
+        # Running it in both processes caused duplicate stock reports (race on
+        # alert_log dedup guard, both fire at 8:30 AM before either writes).
+        # _email_sched = EmailScheduler(
+        #     db_path=DB_PATH, check_on_start=True, daily_check=True,
+        # )
+        # _email_sched.start()
+        log.info("Email scheduler disabled (owned by NennerEngineMonitor)")
 
         def _shutdown():
             log.info("Dashboard shutting down — stopping background threads")

@@ -195,10 +195,25 @@ Examples:
     parser.add_argument("--stock-report", action="store_true",
                         help="Generate and email Stanley's Daily Stock Report")
 
+    parser.add_argument("--api", action="store_true",
+                        help="Start signals API server (FastAPI/uvicorn)")
+    parser.add_argument("--api-port", type=int, default=8051,
+                        help="API server port (default: 8051)")
+
     parser.add_argument("--db", type=str, default=default_db,
                         help=f"Database path (default: {default_db})")
 
     args = parser.parse_args()
+
+    # API server runs its own connections — launch before DB init
+    if args.api:
+        from .api import create_app
+        import uvicorn
+        log = logging.getLogger("nenner")
+        log.info(f"Starting signals API on port {args.api_port} (db: {args.db})")
+        app = create_app(args.db)
+        uvicorn.run(app, host="0.0.0.0", port=args.api_port, log_level="info")
+        return
 
     # Initialize database
     conn = init_db(args.db)
