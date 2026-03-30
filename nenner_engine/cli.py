@@ -135,7 +135,8 @@ def setup_logging(log_path: str):
 def main():
     # Determine paths relative to project root (parent of this package)
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    default_db = os.path.join(project_root, "nenner_signals.db")
+    from nenner_engine.config import DEFAULT_DB_PATH
+    default_db = DEFAULT_DB_PATH
     default_log = os.path.join(project_root, "nenner_engine.log")
 
     setup_logging(default_log)

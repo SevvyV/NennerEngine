@@ -448,6 +448,7 @@ def run_monitor(conn: sqlite3.Connection, interval: int = 60,
 
     cooldown_tracker: dict[tuple[str, str], datetime] = {}
     custom_alert_reset_date: Optional[str] = None
+    scheduler_death_logged = False  # only log once per death
 
     log.info(f"Alert monitor started. Interval={interval}s, "
              f"evaluators={len(_evaluators)}")
@@ -460,6 +461,18 @@ def run_monitor(conn: sqlite3.Connection, interval: int = 60,
             check_count += 1
             now = datetime.now()
             log.debug(f"--- Alert check #{check_count} at {now.strftime('%H:%M:%S')} ---")
+
+            # Health check: restart email scheduler if its thread died
+            if email_sched and not email_sched._thread.is_alive():
+                if not scheduler_death_logged:
+                    log.error("Email scheduler thread died — restarting")
+                    scheduler_death_logged = True
+                try:
+                    email_sched.start()
+                    log.info("Email scheduler thread restarted successfully")
+                    scheduler_death_logged = False
+                except Exception as e:
+                    log.error(f"Email scheduler restart failed: {e}")
 
             # Fetch prices
             rows = get_prices_with_signal_context(conn, try_t1=True)

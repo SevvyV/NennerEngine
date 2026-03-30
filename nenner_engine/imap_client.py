@@ -57,7 +57,7 @@ def get_credentials() -> tuple[str, str]:
             credential = DefaultAzureCredential()
             client = SecretClient(vault_url=vault_url, credential=credential)
             addr_secret = os.environ.get("GMAIL_ADDRESS_SECRET", "gmail-address")
-            pass_secret = os.environ.get("GMAIL_PASSWORD_SECRET", "GmailAppPassword4Nennerbot")
+            pass_secret = os.environ.get("GMAIL_PASSWORD_SECRET", "GmailAppPassword")
             gmail_addr = client.get_secret(addr_secret).value.strip().replace("\xa0", "")
             gmail_pass = client.get_secret(pass_secret).value.strip().replace("\xa0", "")
             return gmail_addr, gmail_pass
@@ -203,8 +203,11 @@ def backfill_imap(conn):
         imap.logout()
 
 
-def check_new_emails(conn):
-    """Check for new emails since last run (incremental mode)."""
+def check_new_emails(conn) -> int:
+    """Check for new emails since last run (incremental mode).
+
+    Returns the number of genuinely new emails parsed and stored.
+    """
     row = conn.execute("SELECT MAX(date_sent) FROM emails").fetchone()
     last_date = row[0] if row[0] else "2020-01-01"
 
@@ -230,6 +233,8 @@ def check_new_emails(conn):
             log.info(f"Found {new_count} new emails")
         else:
             log.info("No new emails")
+
+        return new_count
     finally:
         imap.logout()
 

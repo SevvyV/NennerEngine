@@ -253,16 +253,9 @@ def run_email_check(db_path: str,
         # Snapshot BEFORE email check
         state_before = _snapshot_current_state(conn)
 
-        # Capture log output to count new emails
+        # Check for genuinely new emails (deduped by message_id in store_email)
         log.info("Email scheduler: checking for new Nenner emails...")
-        check_new_emails(conn)
-
-        # Count emails parsed in last 5 minutes as proxy for "new"
-        row = conn.execute("""
-            SELECT COUNT(*) FROM emails
-            WHERE date_parsed >= datetime('now', '-5 minutes')
-        """).fetchone()
-        new_count = row[0] if row else 0
+        new_count = check_new_emails(conn)
         result["new_emails"] = new_count
 
         if new_count > 0:

@@ -36,7 +36,7 @@ from nenner_engine.trade_stats import compute_instrument_stats
 # Configuration
 # ---------------------------------------------------------------------------
 
-DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "nenner_signals.db")
+DB_PATH = r"E:\Workspace\DataCenter\nenner_signals.db"
 WATCHLIST_ROW1 = ["TSLA", "BAC", "MSFT", "AAPL", "GOOG", "NVDA"]
 WATCHLIST_ROW2 = ["GDXJ", "GLD", "SLV", "USO", "UNG", "SOYB", "NEM"]
 WATCHLIST_ROW3 = ["ES", "NQ", "GBTC", "ETHE"]
