@@ -163,6 +163,34 @@ def process_email(conn, msg, source_id: str = None) -> bool:
     # Parse signals via LLM
     results = parse_email_signals_llm(body, email_date, email_id)
 
+    # Sanity check: Stocks Cycle Charts emails should always have cycles.
+    # If signals were parsed but cycles are empty, the LLM likely returned
+    # a partial response — retry once.
+    if (email_type == "stocks_update"
+            and len(results.get("signals", [])) > 0
+            and len(results.get("cycles", [])) == 0):
+        log.warning(
+            f"Stocks Cycle Charts email returned signals but 0 cycles — retrying LLM parse"
+        )
+        results = parse_email_signals_llm(body, email_date, email_id)
+        if len(results.get("cycles", [])) == 0:
+            log.error(
+                f"Retry still returned 0 cycles for email {email_id}: {subject[:60]}"
+            )
+            try:
+                from nenner_engine.alert_dispatch import get_telegram_config, send_telegram
+                token, chat_id = get_telegram_config()
+                if token and chat_id:
+                    send_telegram(
+                        f"\u26a0\ufe0f NennerEngine: Stocks Cycle Charts parsed "
+                        f"{len(results['signals'])} signals but 0 cycles. "
+                        f"Cycle data is missing — stock report will use stale data.\n"
+                        f"Email: {subject[:80]}",
+                        token, chat_id,
+                    )
+            except Exception:
+                pass
+
     # Check for anomalous values (potential typos) before storing
     anomalies = check_signal_anomalies(conn, results.get("signals", []))
     if anomalies:

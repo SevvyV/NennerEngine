@@ -352,35 +352,86 @@ def _fetch_yf_cached() -> dict[str, float]:
         return _yf_cache
 
 
+_DATABENTO_ALIAS = {"GOOG": "GOOGL"}
+_DATABENTO_ALIAS_REV = {v: k for k, v in _DATABENTO_ALIAS.items()}
+
+
+def _fetch_databento_prices(conn: sqlite3.Connection,
+                            tickers: list[str]) -> dict[str, dict]:
+    """Read fresh DataBento equity prices from price_history.
+
+    FischerDaily's equity stream writes 1-second quotes to the shared DB
+    with source='DATABENTO_EQUITY'.  We read them here so the dashboard
+    gets real-time prices without a yFinance round-trip.
+
+    Returns {canonical_ticker: {"price", "source", "as_of"}} for entries
+    fetched within the last 10 minutes.
+    """
+    # Map canonical tickers to DataBento tickers (e.g. GOOG → GOOGL)
+    db_tickers = [_DATABENTO_ALIAS.get(t, t) for t in tickers]
+    ph = ",".join("?" for _ in db_tickers)
+    cutoff = (datetime.now() - timedelta(minutes=10)).strftime("%Y-%m-%d %H:%M:%S")
+
+    rows = conn.execute(f"""
+        SELECT ticker, close, fetched_at
+        FROM latest_prices
+        WHERE source = 'DATABENTO_EQUITY'
+          AND ticker IN ({ph})
+          AND fetched_at >= ?
+    """, [*db_tickers, cutoff]).fetchall()
+
+    result: dict[str, dict] = {}
+    for r in rows:
+        db_ticker = r["ticker"]
+        canonical = _DATABENTO_ALIAS_REV.get(db_ticker, db_ticker)
+        result[canonical] = {
+            "price": r["close"],
+            "source": "DATABENTO_EQUITY",
+            "as_of": r["fetched_at"],
+        }
+    return result
+
+
 def get_current_prices(conn: sqlite3.Connection,
                        tickers: list[str] | None = None,
                        try_t1: bool = True) -> dict[str, dict]:
     """Get the best available price for each ticker.
 
     Priority:
-      1. yFinance (with 5-minute TTL cache)
-      2. Cached in price_history DB (if fresh within 48h)
+      1. DataBento equity stream (from FischerDaily, if fresh within 10 min)
+      2. yFinance (with 5-minute TTL cache)
+      3. Cached in price_history DB (if fresh within 48h)
 
     The try_t1 parameter is accepted for backward compatibility but ignored.
 
     Returns:
         {ticker: {"price": float, "source": str, "as_of": str}}
     """
+    all_tickers = tickers or list(YFINANCE_MAP.keys())
     result: dict[str, dict] = {}
 
-    # 1. yFinance with TTL cache
-    yf_prices = _fetch_yf_cached()
-    now_str = datetime.now().isoformat(timespec="seconds")
-    for ticker, price in yf_prices.items():
-        if tickers is None or ticker in tickers:
-            result[ticker] = {
-                "price": price,
-                "source": "yfinance",
-                "as_of": now_str,
-            }
+    # 1. DataBento equity stream (real-time, from FischerDaily's shared DB)
+    try:
+        db_prices = _fetch_databento_prices(conn, all_tickers)
+        result.update(db_prices)
+    except Exception as e:
+        log.debug(f"DataBento price lookup failed: {e}")
 
-    # 2. Fill gaps from DB cache
-    missing = set(tickers or list(YFINANCE_MAP.keys())) - set(result.keys())
+    # 2. yFinance with TTL cache (fill gaps)
+    missing = set(all_tickers) - set(result.keys())
+    if missing:
+        yf_prices = _fetch_yf_cached()
+        now_str = datetime.now().isoformat(timespec="seconds")
+        for ticker, price in yf_prices.items():
+            if ticker in missing:
+                result[ticker] = {
+                    "price": price,
+                    "source": "yfinance",
+                    "as_of": now_str,
+                }
+
+    # 3. Fill remaining gaps from DB cache
+    missing = set(all_tickers) - set(result.keys())
     if missing:
         cached = get_cached_prices(conn, list(missing), max_age_hours=48)
         for ticker, data in cached.items():
