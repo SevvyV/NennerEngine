@@ -11,7 +11,7 @@ import logging
 import sqlite3
 import threading
 import time
-from datetime import datetime, date, timedelta
+from datetime import UTC, datetime, date, timedelta
 from typing import Optional
 
 log = logging.getLogger("nenner")
@@ -61,7 +61,7 @@ YFINANCE_MAP: dict[str, str | None] = {
     "ZC":       "ZC=F",
     "ZS":       "ZS=F",
     "ZW":       "ZW=F",
-    "LBS":      "LBS=F",
+    "LBS":      "LBR=F",
     # Agriculture (ETFs — same ticker)
     "CORN":     "CORN",
     "SOYB":     "SOYB",
@@ -160,7 +160,8 @@ def get_cached_prices(conn: sqlite3.Connection,
         ).fetchall()
 
     result = {}
-    cutoff = (datetime.now() - timedelta(hours=max_age_hours)).isoformat()
+    # fetched_at is stored in UTC (SQLite datetime('now')), so compare in UTC
+    cutoff = (datetime.now(UTC) - timedelta(hours=max_age_hours)).isoformat()
     for r in rows:
         fetched = r["fetched_at"] or ""
         if fetched >= cutoff:
@@ -370,7 +371,8 @@ def _fetch_databento_prices(conn: sqlite3.Connection,
     # Map canonical tickers to DataBento tickers (e.g. GOOG → GOOGL)
     db_tickers = [_DATABENTO_ALIAS.get(t, t) for t in tickers]
     ph = ",".join("?" for _ in db_tickers)
-    cutoff = (datetime.now() - timedelta(minutes=10)).strftime("%Y-%m-%d %H:%M:%S")
+    # fetched_at is stored in UTC (SQLite datetime('now')), so compare in UTC
+    cutoff = (datetime.now(UTC) - timedelta(minutes=10)).strftime("%Y-%m-%d %H:%M:%S")
 
     rows = conn.execute(f"""
         SELECT ticker, close, fetched_at
