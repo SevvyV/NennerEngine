@@ -440,9 +440,10 @@ def run_monitor(conn: sqlite3.Connection, interval: int = 60,
         db_path = conn.execute("PRAGMA database_list").fetchone()[2]
         email_sched = EmailScheduler(
             db_path=db_path, check_on_start=True, daily_check=True,
+            interval_minutes=15,
         )
         email_sched.start()
-        log.info("Email scheduler active (startup + daily 8:00 AM ET)")
+        log.info("Email scheduler active (startup + daily 8:35 AM ET + every 15m 8-11 AM ET)")
     except Exception as e:
         log.warning(f"Email scheduler failed to start: {e}")
 
