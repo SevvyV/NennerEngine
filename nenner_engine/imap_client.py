@@ -255,6 +255,9 @@ def check_new_emails(conn) -> int:
 
         for uid, msg in messages:
             if process_email(conn, msg, source_id=f"imap-{uid}"):
+                # Mark as read only after successful parse+store
+                uid_bytes = uid.encode() if isinstance(uid, str) else uid
+                imap.store(uid_bytes, '+FLAGS', '\\Seen')
                 new_count += 1
 
         if new_count > 0:
