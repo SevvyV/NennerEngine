@@ -50,7 +50,9 @@ def check_signal_anomalies(
             continue
 
         # Pull last 3 signals for this ticker (excluding the current batch)
-        history = conn.execute(
+        cur = conn.cursor()
+        cur.row_factory = sqlite3.Row
+        history = cur.execute(
             "SELECT origin_price, cancel_level, trigger_level "
             "FROM signals WHERE ticker = ? "
             "ORDER BY date DESC, id DESC LIMIT ?",

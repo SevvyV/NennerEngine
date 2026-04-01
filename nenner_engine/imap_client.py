@@ -115,7 +115,7 @@ def fetch_nenner_emails(imap: imaplib.IMAP4_SSL, since_date: str = None,
         if i % 100 == 0 and i > 0:
             log.info(f"  Fetching {i}/{len(uids)}...")
 
-        status, msg_data = imap.fetch(uid, "(RFC822)")
+        status, msg_data = imap.fetch(uid, "(BODY.PEEK[])")
         if status == "OK" and msg_data[0] is not None:
             raw = msg_data[0][1]
             msg = BytesParser(policy=policy.default).parsebytes(raw)

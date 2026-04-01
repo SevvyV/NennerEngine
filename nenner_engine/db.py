@@ -417,6 +417,9 @@ def compute_current_state(conn: sqlite3.Connection):
     from .instruments import INSTRUMENT_MAP
     active_tickers = {info["ticker"] for info in INSTRUMENT_MAP.values()}
 
+    # Ensure row_factory is set for dict-style access
+    conn.row_factory = sqlite3.Row
+
     # Get the latest signal per ticker, using date + id for proper ordering
     rows = conn.execute("""
         SELECT s.id, s.date, s.instrument, s.ticker, s.asset_class,
