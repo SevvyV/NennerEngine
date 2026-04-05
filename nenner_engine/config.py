@@ -18,7 +18,7 @@ SMTP_TIMEOUT = 30
 NENNER_SENDER = "newsletter@charlesnenner.com"
 
 # ── LLM ─────────────────────────────────────────────────────────
-LLM_MODEL = "claude-sonnet-4-5-20250929"
+LLM_MODEL = "claude-opus-4-6"
 LLM_MAX_TOKENS_REPORT = 2048
 LLM_MAX_TOKENS_STANLEY = 4096
 LLM_RETRY_ATTEMPTS = 2
