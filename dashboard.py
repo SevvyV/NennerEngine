@@ -22,6 +22,7 @@ import argparse
 import logging
 import os
 import sqlite3
+import threading
 
 import dash
 
@@ -622,6 +623,7 @@ app.layout = build_layout
 # Module-level refs set by main() so the health endpoint can inspect them
 _alert_monitor = None
 _email_sched = None
+_equity_stream = None
 
 
 @app.server.route("/health")
@@ -635,6 +637,8 @@ def health():
         threads["alert_monitor"] = _alert_monitor._thread.is_alive() if _alert_monitor._thread else False
     if _email_sched and hasattr(_email_sched, "_thread"):
         threads["email_scheduler"] = _email_sched._thread.is_alive() if _email_sched._thread else False
+    if _equity_stream:
+        threads["equity_stream"] = _equity_stream.is_alive()
 
     all_healthy = all(threads.values()) if threads else True
     status_code = 200 if all_healthy else 503
@@ -838,12 +842,13 @@ def main():
     # Start background monitor threads (alert evaluator + email scheduler).
     # Only in non-debug mode — Werkzeug's reloader forks a child process
     # and we don't want duplicate threads.
-    global _alert_monitor, _email_sched
+    global _alert_monitor, _email_sched, _equity_stream
 
     if not args.debug or os.environ.get("WERKZEUG_RUN_MAIN") == "true":
         import atexit
         from nenner_engine.alerts import AlertMonitorThread, AlertConfig
         from nenner_engine.email_scheduler import EmailScheduler
+        from nenner_engine.equity_stream import EquityStreamThread
 
         _alert_monitor = AlertMonitorThread(
             db_path=DB_PATH, interval=60, config=AlertConfig(),
@@ -860,12 +865,23 @@ def main():
         # _email_sched.start()
         log.info("Email scheduler disabled (owned by NennerEngineMonitor)")
 
+        # DataBento equity stream — live spot prices for watchlist ETFs/equities
+        _eq_stop = threading.Event()
+        _equity_stream = EquityStreamThread(
+            stop_event=_eq_stop, db_path=DB_PATH,
+        )
+        _equity_stream.start()
+        log.info("Equity stream thread started (DataBento EQUS.MINI)")
+
         def _shutdown():
             log.info("Dashboard shutting down — stopping background threads")
             if _alert_monitor:
                 _alert_monitor.stop()
             if _email_sched:
                 _email_sched.stop()
+            if _equity_stream:
+                _eq_stop.set()
+                _equity_stream.join(timeout=10)
 
         atexit.register(_shutdown)
 
