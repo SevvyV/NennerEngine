@@ -24,29 +24,6 @@ Nenner publishes cycle-based timing signals via email. The LLM parser (Haiku) ex
 
 Detailed interpretation rules: `.claude/rules/signal-interpretation.md`
 
-## Risk Rules (HARD LIMITS)
-
-| Rule | Limit |
-|------|-------|
-| Max single position | $800,000 |
-| Max gross exposure | $15,000,000 |
-| Max correlated cluster | 40% of gross |
-| Target book size | 5 positions |
-| Stop policy | Nenner cancel levels ARE the stops — no discretionary overrides |
-| Cancel respect | Close through = EXIT. Intraday breach without close = HOLD |
-
-Detailed risk rules: `.claude/rules/risk-management.md`
-
-## Correlation Clusters
-- **Precious Metals:** GC, SI, HG, GLD, SLV, GDXJ, NEM, SIL
-- **Equity Indices:** ES, NQ, YM, NYFANG, QQQ, NYA
-- **Fixed Income:** ZB, ZN, TLT, FGBL (inverse to equities in risk-off)
-- **Energy:** CL, NG, USO, UNG
-- **Agriculture:** ZC, ZS, ZW, LBS, CORN, SOYB, WEAT
-- **Currencies:** DXY, EUR/USD, GBP/USD, USD/JPY
-- **Crypto:** BTC, ETH, GBTC, IBIT, ETHE, BITO
-- **Single Stocks:** Group by sector — NVDA/TSLA (tech), BAC/C/GS (financials)
-
 ## Futures-to-ETF Proxy Map
 Nenner signals are on futures tickers. Trading uses ETF proxies. Signal data (direction, cancel, cycles, stats) always comes from the futures ticker in the DB.
 
@@ -72,19 +49,6 @@ Nenner signals are on futures tickers. Trading uses ETF proxies. Signal data (di
 - **macro:** GLD, SLV, TLT, USO, UNG, CORN, SOYB, WEAT, FXE, UUP, GBTC, IBIT, BITO, ETHE, GDXJ, NEM, SIL, DIA
 - **all:** union of all groups
 
-## Position Sizing Framework
-1. **BASE** = min(Half-Kelly x Portfolio, $800,000). If Kelly < 0 or thin data → $100,000.
-2. **CYCLES:** D+W+M aligned = 1.0x | D+W only = 0.75x | D only = 0.50x | conflicting = 0.25x/SKIP
-3. **CANCEL DISTANCE:** <1% = 0.5x (whipsaw) | 1-3.5% = 1.0x (sweet spot) | >3.5% = 0.7x (wide)
-4. **CORRELATION:** Cluster >25% gross = 0.5x | >35% = SKIP
-5. **CONVICTION:** "Note the change" = 1.25x | Fresh <3d = 1.0x | Aged >14d = 0.75x | Re-entry = 0.85x
-
-## Scoring Model
-```
-Score = Sharpe(35%) + Kelly(20%) + EV/MaxDD(20%) + WinRate(15%) + Confidence(10%)
-```
-Confidence = min(trade_count / 50, 1.0). Cutoffs: macro 2023-02-21, single stock 2025-11-01.
-
 ## Analysis Conventions
 - When I say "what does Nenner say about X" → query current_state + cycles + price_targets
 - Present trade ideas with: cancel level, distance to cancel, dollar risk, cycle alignment
@@ -92,9 +56,7 @@ Confidence = min(trade_count / 50, 1.0). Cutoffs: macro 2023-02-21, single stock
 - Currency: USD. Benchmark: SPY for equity, flat cash for non-equity.
 
 ## Rules Files
-`.claude/rules/risk-management.md` — pre-trade checklist, exits, drawdown, correlation
 `.claude/rules/signal-interpretation.md` — signal hierarchy, cycles, freshness decay
-`.claude/rules/statistical-analysis.md` — SQS framework, momentum, vol regime, backtest
 
 ## DataBento Library Reference
 
