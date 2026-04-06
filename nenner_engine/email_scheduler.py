@@ -530,14 +530,22 @@ class EmailScheduler:
                         self._do_check(f"daily_8am_ET ({today_str})")
 
                 # Interval-based check (only within the ET window, e.g. 8-11 AM)
+                # Sundays: scan hourly from 9 AM to midnight (Nenner cycle
+                # charts can arrive outside the normal weekday window).
                 if self.interval_minutes:
-                    win_start, win_end = self.interval_window
+                    is_sunday = now_et.weekday() == 6
+                    if is_sunday:
+                        win_start, win_end = 9, 24
+                        effective_interval = 60
+                    else:
+                        win_start, win_end = self.interval_window
+                        effective_interval = self.interval_minutes
                     in_window = win_start <= now_et.hour < win_end
                     if in_window:
                         now = datetime.now()
                         if (self._last_interval_check is None
                                 or now - self._last_interval_check
-                                >= timedelta(minutes=self.interval_minutes)):
+                                >= timedelta(minutes=effective_interval)):
                             self._last_interval_check = now
                             # Skip if we just did a startup or daily check
                             last = self.last_result
@@ -546,7 +554,7 @@ class EmailScheduler:
                                 pass  # too recent, skip
                             else:
                                 self._do_check(
-                                    f"interval_{self.interval_minutes}m "
+                                    f"interval_{effective_interval}m "
                                     f"({now_et.strftime('%H:%M')} ET)"
                                 )
 
