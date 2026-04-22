@@ -37,8 +37,10 @@ from .alert_dispatch import (  # noqa: F401 — re-export for backwards compat
 
 log = logging.getLogger(__name__)
 
-PROXIMITY_DANGER_PCT = 0.5    # Cancel distance < 0.5% = DANGER
-PROXIMITY_WARNING_PCT = 1.0   # Cancel distance < 1.0% = WATCH
+from .config import (  # noqa: E402 — re-exported for back-compat
+    PROXIMITY_DANGER_PCT,
+    PROXIMITY_WARNING_PCT,
+)
 
 
 # ---------------------------------------------------------------------------

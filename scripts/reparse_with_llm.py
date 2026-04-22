@@ -50,7 +50,8 @@ logging.basicConfig(
 logging.getLogger("httpx").setLevel(logging.WARNING)
 log = logging.getLogger("reparse")
 
-DB_PATH = "nenner_signals.db"
+from nenner_engine.config import DEFAULT_DB_PATH
+DB_PATH = DEFAULT_DB_PATH
 
 
 def get_already_parsed_email_ids(conn):

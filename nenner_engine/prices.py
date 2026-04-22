@@ -20,7 +20,7 @@ log = logging.getLogger(__name__)
 _yf_cache: dict[str, float] = {}
 _yf_cache_time: float = 0.0
 _yf_cache_lock = threading.Lock()
-_YF_CACHE_TTL = 300  # 5 minutes
+from .config import YF_CACHE_TTL_SECONDS  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -304,12 +304,12 @@ def _fetch_yf_cached() -> dict[str, float]:
     """
     global _yf_cache, _yf_cache_time
     now = time.monotonic()
-    if _yf_cache and (now - _yf_cache_time) < _YF_CACHE_TTL:
+    if _yf_cache and (now - _yf_cache_time) < YF_CACHE_TTL_SECONDS:
         return _yf_cache
 
     with _yf_cache_lock:
         # Double-check after acquiring lock
-        if _yf_cache and (time.monotonic() - _yf_cache_time) < _YF_CACHE_TTL:
+        if _yf_cache and (time.monotonic() - _yf_cache_time) < YF_CACHE_TTL_SECONDS:
             return _yf_cache
 
         try:

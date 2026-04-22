@@ -590,10 +590,13 @@ class TestLiveDatabaseValidation(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "nenner_signals.db")
-        if not os.path.exists(db_path):
+        # Use the canonical DB path (config-defined) rather than a stale
+        # repo-root copy. If the live DB is missing, the whole class
+        # skips — these tests sanity-check production state, not seeded.
+        from nenner_engine.config import DEFAULT_DB_PATH
+        if not os.path.exists(DEFAULT_DB_PATH):
             raise unittest.SkipTest("Live database not found")
-        cls.conn = sqlite3.connect(db_path)
+        cls.conn = sqlite3.connect(DEFAULT_DB_PATH)
         cls.conn.row_factory = sqlite3.Row
         # Rebuild state
         compute_current_state(cls.conn)

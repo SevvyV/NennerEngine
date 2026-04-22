@@ -9,9 +9,10 @@ Usage:
 """
 
 import sqlite3
-import os
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "nenner_signals.db")
+from nenner_engine.config import DEFAULT_DB_PATH
+
+DB_PATH = DEFAULT_DB_PATH
 
 RULES = [
     # --- Cycle Logic ---

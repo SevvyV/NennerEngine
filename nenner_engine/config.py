@@ -79,3 +79,12 @@ SCHEDULER_TICK_SECONDS = 30
 # Nenner sends emails Mon/Wed/Fri. Alert if none parsed by noon ET.
 NENNER_EXPECTED_DAYS = {0, 2, 4}  # Monday, Wednesday, Friday
 WATCHDOG_HOUR, WATCHDOG_MINUTE = 12, 0
+
+# ── Tunables ──────────────────────────────────────────────────
+# Knobs that were previously scattered across alerts.py, alert_dispatch.py,
+# prices.py, and dashboard.py. Centralized so a tuning change is one edit.
+PROXIMITY_DANGER_PCT = 0.5    # Cancel distance < 0.5% → DANGER alert
+PROXIMITY_WARNING_PCT = 1.0   # Cancel distance < 1.0% → WATCH alert
+ALERT_COOLDOWN_MINUTES = 60   # Per-(ticker, alert_type) cooldown
+YF_CACHE_TTL_SECONDS = 300    # yFinance price cache TTL (5 min)
+DASHBOARD_REFRESH_MS = 30_000 # Dash auto-refresh interval (30 s)

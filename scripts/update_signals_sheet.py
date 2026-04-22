@@ -15,9 +15,10 @@ import sys
 
 import xlwings as xw
 
+from nenner_engine.config import DEFAULT_DB_PATH
 from nenner_engine.trade_stats import compute_instrument_stats
 
-DB = "E:/Workspace/NennerEngine/nenner_signals.db"
+DB = DEFAULT_DB_PATH
 WB = "E:/Workspace/DataCenter/Nenner_Positions.xlsm"
 SHEET = "NennerSignals"
 

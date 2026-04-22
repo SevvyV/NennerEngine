@@ -11,7 +11,8 @@ import statistics
 from collections import defaultdict
 from datetime import datetime
 
-DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "nenner_signals.db")
+from nenner_engine.config import DEFAULT_DB_PATH
+DB_PATH = DEFAULT_DB_PATH
 
 # Price sanity: skip trades where entry/exit ratio > 5x (likely misparse)
 PRICE_SANITY_MAX_RATIO = 5.0

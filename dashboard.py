@@ -44,7 +44,7 @@ WATCHLIST_ROW1 = ["TSLA", "BAC", "MSFT", "AAPL", "GOOG", "NVDA"]
 WATCHLIST_ROW2 = ["GDXJ", "GLD", "SLV", "USO", "UNG", "SOYB", "NEM"]
 WATCHLIST_ROW3 = ["ES", "NQ", "GBTC", "ETHE"]
 WATCHLIST_TICKERS = WATCHLIST_ROW1 + WATCHLIST_ROW2 + WATCHLIST_ROW3
-REFRESH_INTERVAL_MS = 30_000  # 30 seconds
+from nenner_engine.config import DASHBOARD_REFRESH_MS  # noqa: E402
 
 
 # Color palette
@@ -57,7 +57,7 @@ COLOR_CARD_BG = "#2b3035"
 COLOR_HEADER = "#adb5bd"
 
 # Market Data page config
-MD_REFRESH_INTERVAL_MS = 900_000  # 15 minutes
+MD_DASHBOARD_REFRESH_MS = 900_000  # 15 minutes
 _DISPLAY_ALIAS = {"GOOGL": "GOOG"}  # DataBento → display ticker
 
 # Previous close cache (refreshed once per day). Lock protects read-modify-
@@ -612,7 +612,7 @@ def _build_nav():
 def _signals_page():
     return dbc.Container([
         # Auto-refresh interval
-        dcc.Interval(id="refresh-interval", interval=REFRESH_INTERVAL_MS, n_intervals=0),
+        dcc.Interval(id="refresh-interval", interval=DASHBOARD_REFRESH_MS, n_intervals=0),
 
         # Header with Refresh button
         dbc.Row([
@@ -702,7 +702,7 @@ def _signals_page():
 
 def _market_data_page():
     return dbc.Container([
-        dcc.Interval(id="md-refresh-interval", interval=MD_REFRESH_INTERVAL_MS, n_intervals=0),
+        dcc.Interval(id="md-refresh-interval", interval=MD_DASHBOARD_REFRESH_MS, n_intervals=0),
 
         dbc.Row([
             dbc.Col(
@@ -1025,7 +1025,7 @@ def refresh_dashboard(_n, _btn):
     footer_parts = [
         f"Last refresh: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
         f"Data: {stats['date_min']} to {stats['date_max']}",
-        f"Auto-refresh: {REFRESH_INTERVAL_MS // 1000}s",
+        f"Auto-refresh: {DASHBOARD_REFRESH_MS // 1000}s",
     ]
 
     footer = "  |  ".join(footer_parts)
@@ -1149,7 +1149,7 @@ def refresh_market_data(_n, _btn):
     footer = html.Span([
         f"Last refresh: {now.strftime('%H:%M:%S')}  |  {len(rows)} instruments  |  Stream: ",
         html.Span(status, style={"color": status_color, "fontWeight": "bold"}),
-        f"  |  Auto-refresh: {MD_REFRESH_INTERVAL_MS // 60_000} min",
+        f"  |  Auto-refresh: {MD_DASHBOARD_REFRESH_MS // 60_000} min",
     ])
 
     return table, footer

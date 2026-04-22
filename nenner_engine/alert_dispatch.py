@@ -17,11 +17,12 @@ import urllib.request
 from datetime import datetime, timedelta
 from typing import Optional
 
-from .config import load_env_once
+from .config import (
+    load_env_once,
+    ALERT_COOLDOWN_MINUTES,  # noqa: F401 — re-exported for back-compat
+)
 
 log = logging.getLogger(__name__)
-
-ALERT_COOLDOWN_MINUTES = 60
 
 
 # ---------------------------------------------------------------------------

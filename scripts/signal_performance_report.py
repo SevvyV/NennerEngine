@@ -36,7 +36,8 @@ from fpdf import FPDF
 # Configuration
 # ---------------------------------------------------------------------------
 
-DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "nenner_signals.db")
+from nenner_engine.config import DEFAULT_DB_PATH
+DB_PATH = DEFAULT_DB_PATH
 OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "performance_reports")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
