@@ -1,3 +1,108 @@
+[project]
+name = "nenner-engine"
+version = "0.1.0"
+description = "Nenner cycle research signal engine — IMAP ingest, LLM parser, alert dispatch, dashboard"
+requires-python = ">=3.13"
+# Pinned to currently-installed versions with major-version flex. Patch and
+# minor updates are allowed; major version bumps require explicit review.
+# Generated 2026-04-22 from the active .venv.
+dependencies = [
+    # Core runtime
+    "anthropic>=0.83.0,<1.0",
+    "dash>=4.0.0,<5.0",
+    "dash-bootstrap-components>=2.0.4,<3.0",
+    "Flask>=3.1.3,<4.0",
+    "fastapi>=0.135.2,<1.0",
+    "uvicorn>=0.42.0,<1.0",
+    # Data
+    "databento>=0.72.0,<1.0",
+    "yfinance>=1.2.0,<2.0",
+    "pandas>=3.0.1,<4.0",
+    "numpy>=2.4.2,<3.0",
+    # I/O + secrets
+    "requests>=2.32.5,<3.0",
+    "cryptography>=46.0.5,<50.0",
+    "azure-identity>=1.25.2,<2.0",
+    "azure-keyvault-secrets>=4.10.0,<5.0",
+    "xlwings>=0.33.20,<1.0",
+    "tzdata>=2025.3",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=9.0,<10.0",
+    "pytest-cov>=7.0,<8.0",
+    "ruff>=0.6,<1.0",
+    "mypy>=1.10,<2.0",
+]
+
+# Explicit package list — without this, setuptools auto-discovery would
+# pick only `nenner_engine` (matches project name) and silently exclude
+# `dashboard/`. Both are real top-level packages we want installable.
+[tool.setuptools]
+packages = ["nenner_engine", "dashboard"]
+
+# ─── Test runner ────────────────────────────────────────────────────────────
+
 [tool.pytest.ini_options]
 testpaths = ["tests", "."]
 addopts = "-v --tb=short"
+
+# ─── Linting (ruff) ─────────────────────────────────────────────────────────
+# Minimal config — enables ruff with sane defaults. We don't auto-fix or
+# fail CI on existing issues; the goal is to make new code grep-able and
+# give devs a one-line `ruff check .` to triage drift.
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+extend-exclude = ["_archive", ".venv", ".claude"]
+
+[tool.ruff.lint]
+# Default rules: E (pycodestyle errors), F (pyflakes), I (isort).
+# Skip W (pycodestyle warnings) — too noisy on legacy code.
+select = ["E", "F", "I"]
+# Real-world ignores for the existing codebase. Tighten over time.
+ignore = [
+    "E501",   # line-too-long: many style strings deliberately exceed 100 cols
+    "E731",   # lambda assigned to variable: idiomatic in Dash callbacks
+    "F401",   # unused import: many re-exports use `# noqa: F401` already
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests freely use star imports + reuse fixture names
+"tests/*" = ["F811"]
+# Re-exports in package __init__ are intentional
+"**/__init__.py" = ["F401"]
+
+# ─── Type checking (mypy) ───────────────────────────────────────────────────
+# Permissive baseline — the codebase isn't typed yet. mypy runs cleanly on
+# the parts that ARE typed (config, db helpers, recent Phase 3.2/3.3 splits).
+# Strictness can be raised module-by-module via [[tool.mypy.overrides]].
+
+[tool.mypy]
+python_version = "3.13"
+ignore_missing_imports = true
+follow_imports = "silent"
+allow_untyped_defs = true
+allow_untyped_calls = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+exclude = [
+    "_archive/",
+    "\\.venv/",
+    "\\.claude/",
+]
+
+# Tighter rules for the modules we've already cleaned up. Add more here as
+# code is refactored.
+[[tool.mypy.overrides]]
+module = [
+    "nenner_engine.config",
+    "nenner_engine.tz",
+    "nenner_engine.db",
+    "dashboard.data",
+    "dashboard.components",
+]
+disallow_untyped_defs = false   # flip to true once these modules are fully typed
+warn_return_any = true
