@@ -14,7 +14,7 @@ from typing import Optional
 
 from .instruments import INSTRUMENT_MAP, get_instrument_map_json
 
-from .config import LLM_MODEL
+from .config import LLM_MODEL, load_env_once
 
 log = logging.getLogger("nenner")
 
@@ -133,21 +133,6 @@ If no signals/cycles/targets are found for a category, return an empty array.
 # Credential Retrieval
 # ---------------------------------------------------------------------------
 
-def _load_env():
-    """Load .env file into os.environ."""
-    for search_dir in [os.getcwd(),
-                       os.path.dirname(os.path.dirname(os.path.abspath(__file__)))]:
-        env_path = os.path.join(search_dir, ".env")
-        if os.path.exists(env_path):
-            with open(env_path) as f:
-                for line in f:
-                    line = line.strip()
-                    if "=" in line and not line.startswith("#"):
-                        key, val = line.split("=", 1)
-                        os.environ.setdefault(key.strip(), val.strip())
-            break
-
-
 def get_anthropic_api_key() -> str:
     """Get Anthropic API key from env vars, .env file, or Azure Key Vault.
 
@@ -157,7 +142,7 @@ def get_anthropic_api_key() -> str:
 
     Raises ValueError if no key found.
     """
-    _load_env()
+    load_env_once()
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if api_key:
         return api_key.strip()
@@ -205,31 +190,63 @@ def _build_system_prompt() -> str:
 
 
 def _salvage_truncated_json(text: str) -> Optional[dict]:
-    """Attempt to salvage a truncated JSON response by closing open structures."""
-    # Count open braces/brackets
-    open_braces = text.count("{") - text.count("}")
-    open_brackets = text.count("[") - text.count("]")
+    """Attempt to salvage a truncated JSON response by closing open structures.
 
-    # Strip any trailing partial values (comma, partial string, etc.)
+    Walks a stack of `{` / `[` openers through the text (respecting strings
+    and escapes), then progressively strips trailing characters until a
+    closing attempt — with brackets closed in LIFO order — parses cleanly.
+    """
     salvaged = text.rstrip()
-    # Remove trailing comma if present
-    if salvaged.endswith(","):
+
+    for _ in range(len(salvaged) + 1):
+        stack: list[str] = []
+        in_string = False
+        escape = False
+        balanced = True
+        for ch in salvaged:
+            if escape:
+                escape = False
+                continue
+            if ch == "\\":
+                escape = True
+                continue
+            if ch == '"':
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+            if ch in "{[":
+                stack.append(ch)
+            elif ch in "}]":
+                if not stack:
+                    balanced = False
+                    break
+                stack.pop()
+
+        if not balanced:
+            return None
+
+        candidate = salvaged
+        if in_string:
+            candidate += '"'
+        # Trim separators that would be mid-value at the truncation point
+        while candidate and candidate[-1] in ",: \t\n\r":
+            candidate = candidate[:-1]
+        # Close any open containers in LIFO order
+        for opener in reversed(stack):
+            candidate += "]" if opener == "[" else "}"
+
+        try:
+            result = json.loads(candidate)
+            if isinstance(result, dict):
+                return result
+        except json.JSONDecodeError:
+            pass
+
+        if not salvaged:
+            break
         salvaged = salvaged[:-1]
-    # Remove partial key-value pairs (trailing colon or partial string)
-    while salvaged and salvaged[-1] not in "]}\"0123456789nulltruefalse"[-1:]:
-        salvaged = salvaged[:-1].rstrip()
-        if salvaged.endswith(","):
-            salvaged = salvaged[:-1]
 
-    # Close open structures
-    salvaged += "]" * open_brackets + "}" * open_braces
-
-    try:
-        result = json.loads(salvaged)
-        if isinstance(result, dict):
-            return result
-    except json.JSONDecodeError:
-        pass
     return None
 
 
