@@ -93,20 +93,69 @@ class EquityStreamThread(threading.Thread):
 
     def run(self) -> None:
         log.info("EquityStreamThread: starting with %d tickers", len(self._tickers))
+
+        # Reconnect backoff: 10s, 30s, 60s, then 5min cap. Admin gets a
+        # single Telegram after _ALERT_AFTER consecutive failures (typically
+        # signals a DataBento auth / subscription problem, not a transient
+        # network blip).
+        _BACKOFF_SEQUENCE = [10, 30, 60, 300]
+        _ALERT_AFTER = 3
+        consecutive_failures = 0
+        admin_alerted = False
+
         try:
             while not self._stop_event.is_set():
                 try:
                     self._run_stream()
-                except Exception:
-                    log.exception(
-                        "EquityStreamThread: stream error, reconnecting in 10s"
-                    )
+                except Exception as e:
+                    consecutive_failures += 1
                     self._healthy = False
-                    if self._stop_event.wait(timeout=10):
+                    backoff = _BACKOFF_SEQUENCE[
+                        min(consecutive_failures - 1, len(_BACKOFF_SEQUENCE) - 1)
+                    ]
+                    log.exception(
+                        "EquityStreamThread: stream error "
+                        "(consecutive=%d), reconnecting in %ds",
+                        consecutive_failures, backoff,
+                    )
+                    if (consecutive_failures >= _ALERT_AFTER
+                            and not admin_alerted):
+                        self._alert_admin_on_persistent_failure(e, consecutive_failures, backoff)
+                        admin_alerted = True
+                    if self._stop_event.wait(timeout=backoff):
                         break
+                else:
+                    # _run_stream returned cleanly (stop_event set inside loop)
+                    if consecutive_failures:
+                        log.info(
+                            "EquityStreamThread: recovered after %d failure(s)",
+                            consecutive_failures,
+                        )
+                    consecutive_failures = 0
+                    admin_alerted = False
         finally:
             self._healthy = False
             log.info("EquityStreamThread: stopped")
+
+    @staticmethod
+    def _alert_admin_on_persistent_failure(
+        err: Exception, failures: int, next_backoff_s: int,
+    ) -> None:
+        """One-shot Telegram on persistent DataBento connection failure."""
+        try:
+            from .alert_dispatch import get_telegram_config, send_telegram
+            token, chat_id = get_telegram_config()
+            if not token or not chat_id:
+                return
+            send_telegram(
+                f"🚨 NennerEngine equity stream: {failures} consecutive "
+                f"DataBento reconnect failures.\n"
+                f"Last error: {type(err).__name__}: {err}\n"
+                f"Will keep retrying at {next_backoff_s}s intervals.",
+                token, chat_id,
+            )
+        except Exception:
+            pass
 
     def _run_stream(self) -> None:
         import contextlib
