@@ -123,17 +123,19 @@ def build_story() -> list:
     # ---- Cover ----
     story.append(Paragraph("NennerEngine Refactor Report", H_TITLE))
     story.append(Paragraph(
-        "Session of April 21–22, 2026 &nbsp; | &nbsp; Claude Opus 4.7",
+        "Sessions of April 21–22, 2026 &nbsp; | &nbsp; Claude Opus 4.7",
         H_SUBTITLE,
     ))
 
     summary_data = [
-        kv_row("Session duration", "~3.5 hours (21:00 – 00:20 EDT)"),
-        kv_row("Commits landed", "20"),
-        kv_row("Tests (tests/)", "139 passing", SUCCESS.hexval()),
-        kv_row("Net new tests", "25 (across 4 new test files)"),
-        kv_row("Phases complete", "1 (Safety), 2 (Stability), 3.4–3.6 (Architecture)"),
-        kv_row("Phases remaining", "3.1–3.3 (big refactors), 4 (hygiene)"),
+        kv_row("Session duration", "~7.5 hours (Apr 21 21:00 – 00:20 + Apr 22 08:40 – 12:35 EDT)"),
+        kv_row("Commits landed", "34 (20 overnight + 14 morning of Apr 22)"),
+        kv_row("Tests passing", "385 across tests/ + test_nenner_engine.py", SUCCESS.hexval()),
+        kv_row("Net new tests", "74 (across 10 new test files)"),
+        kv_row("Phases complete",
+               "1 (Safety), 2 (Stability), 3.2 + 3.3 (dashboard + stock_report split), "
+               "3.4–3.6 (Architecture), 4 (Hygiene)"),
+        kv_row("Phases remaining", "3.1 only (Canonical query layer)"),
         kv_row("Working tree", "Clean", SUCCESS.hexval()),
         kv_row("Known regressions from this work", "None", SUCCESS.hexval()),
     ]
@@ -429,11 +431,132 @@ def build_story() -> list:
 
     story.append(PageBreak())
 
-    # ---- Known risks for Phase 4 ----
-    story.append(Paragraph("Known Pre-Existing Risks", H1))
+    # =======================================================================
+    # Day 2 — Morning of April 22
+    # =======================================================================
+    story.append(Paragraph("Day 2 — April 22 Morning Session", H1))
     story.append(Paragraph(
-        "These surfaced during the red-team audit but pre-date this "
-        "session's work. Called out here so they don't get lost.",
+        "~4 hours, 14 more commits. The overnight batch (53 commits including "
+        "the 20 from Day 1) was pushed to origin first. The session then "
+        "moved through the Phase-3 splits the Day-1 report marked as "
+        "&quot;bigger refactors, recommended after a few trading days&quot; — "
+        "the risk calculus flipped once the defensive hardening landed cleanly "
+        "and morning ingest ran green.",
+        BODY,
+    ))
+    story.append(Paragraph(
+        "Highlights in landing order:",
+        BODY,
+    ))
+    story.append(bullet(
+        "<b>Phase 3.3 split stock_report.py (1,399 lines)</b> into "
+        "<font name='Courier'>stock_report/{data,html,llm,__init__}.py</font>. "
+        "Characterization test pins build_stock_report_html byte-for-byte "
+        "against a committed golden file — the split changed zero rendered output."
+    ))
+    story.append(bullet(
+        "<b>Phase 3.2 split dashboard.py (1,246 lines)</b> into a "
+        "<font name='Courier'>dashboard/</font> package of 5 modules + thin root "
+        "<font name='Courier'>dashboard.py</font> shim (launcher contract preserved). "
+        "First attempt crashed production with a name-shadow bug (<font name='Courier'>app.py</font> "
+        "submodule collided with re-exported Dash instance). Fixed "
+        "via rename to <font name='Courier'>dash_app.py</font> + regression test (006ae6a) within "
+        "7 minutes of the pause — NSSM auto-restart kicked in cleanly "
+        "after the hotfix."
+    ))
+    story.append(bullet(
+        "<b>All 5 pre-existing risks hardened</b> (a95d9ca). Migration error "
+        "masking narrowed to duplicate-column only; compute_current_state "
+        "wrapped in <font name='Courier'>with conn:</font> for atomicity; scheduler minute-window "
+        "replaced with a timedelta-based helper that spans hour boundaries; "
+        "alerts.py guards against <font name='Courier'>_thread is None</font>; IMAP now logs a WARN "
+        "when Gmail's Authentication-Results header fails to show "
+        "dkim=pass or dmarc=pass."
+    ))
+    story.append(bullet(
+        "<b>API SQLite threading fix</b> (ca89510). Surfaced in live api_stderr "
+        "at 09:38 this morning: FastAPI's sync-handler threadpool was closing "
+        "a per-request connection on a different thread than it was opened on. "
+        "One-line <font name='Courier'>check_same_thread=False</font>."
+    ))
+    story.append(bullet(
+        "<b>Phase 4 hygiene</b> (2dd09c7, ffb9bd9). Deleted 4 stale DB files "
+        "at repo root and redirected 5 scripts + the TestLiveDatabaseValidation "
+        "class to the canonical DataCenter copy. Consolidated 5 magic numbers "
+        "(PROXIMITY_DANGER_PCT, PROXIMITY_WARNING_PCT, ALERT_COOLDOWN_MINUTES, "
+        "YF_CACHE_TTL_SECONDS, DASHBOARD_REFRESH_MS) into config.py. Enabled "
+        "NSSM <font name='Courier'>AppRotateOnline=1</font> to fix the 158 MB dashboard_stderr.log "
+        "drift (needs admin one-liner to apply to running services)."
+    ))
+    story.append(bullet(
+        "<b>Stale test fix</b> (f841b59). Three tests in test_nenner_engine.py "
+        "were silently failing on main: test_bac_sell pinned BAC's direction "
+        "to a Feb 18 snapshot, and TestCancelTrajectory hardcoded a date that "
+        "rolled out of the rolling 30-day SQL window. Relaxed and rolling respectively."
+    ))
+    story.append(bullet(
+        "<b>Silent email leak caught</b> (33169c9). TestStanleyBriefGeneration's "
+        "three methods patched the LLM but not the SMTP send — every test "
+        "run fired real Stanley Morning Briefs to REPORT_RECIPIENT via "
+        "<font name='Courier'>postmaster.send_email</font>, which is lazy-imported inside "
+        "generate_morning_brief. User reported 6+ unexpected briefs in inbox "
+        "before it was diagnosed. Now patched; suite runtime dropped from ~10s "
+        "to ~6s."
+    ))
+    story.append(bullet(
+        "<b>49 net new tests across 6 new files.</b> "
+        "<font name='Courier'>tests/test_stock_report.py</font> "
+        "(3: byte-for-byte HTML golden), "
+        "<font name='Courier'>tests/test_compute_current_state.py</font> "
+        "(4: atomicity, breach-flip, DATABENTO exclusion), "
+        "<font name='Courier'>tests/test_within_window.py</font> "
+        "(11: hour-boundary regressions for Risk #3), "
+        "<font name='Courier'>tests/test_evaluate_price_alerts.py</font> "
+        "(12: DANGER/WATCH thresholds + payload), "
+        "<font name='Courier'>tests/test_dashboard_split.py</font> "
+        "(15: import smoke, public API, layout component IDs, fetchers), "
+        "<font name='Courier'>tests/test_get_prices_with_signal_context.py</font> "
+        "(11: pnl, SELL inversion, target matching), "
+        "<font name='Courier'>tests/test_email_scheduler_state_machine.py</font> "
+        "(18: one-fire-per-day dedup + weekday/window gating)."
+    ))
+
+    story.append(Spacer(1, 10))
+    story.append(Paragraph(
+        "<b>Lessons from Day 2 production incidents:</b>",
+        BODY,
+    ))
+    story.append(bullet(
+        "<i>Import smoke tests are necessary but not sufficient.</i> The "
+        "dashboard-split smoke test (<font name='Courier'>import dashboard</font>) passed on the "
+        "broken commit because it never exercised <font name='Courier'>lifecycle.main()</font>'s "
+        "<font name='Courier'>_app_module.app.run(...)</font> path. Added "
+        "<font name='Courier'>test_lifecycle_app_module_is_a_module</font> using "
+        "<font name='Courier'>isinstance(x, types.ModuleType)</font> — the cheapest test that "
+        "would have failed loudly on the name-shadow bug."
+    ))
+    story.append(bullet(
+        "<i>Slow tests are a signal.</i> The Stanley brief test was adding "
+        "~4 seconds per run for real SMTP. That should have been a tell for "
+        "unpatched network I/O months ago. Now on the radar: audit test "
+        "runtimes, investigate anything &gt;100ms for pure unit tests."
+    ))
+    story.append(bullet(
+        "<i>Production addresses in test code is a pattern to lint.</i> "
+        "<font name='Courier'>REPORT_RECIPIENT</font> in config.py flowing through an "
+        "unpatched send path reached a real inbox. A simple assertion that "
+        "test runs never send real email (e.g. via an SMTP monkeypatch in "
+        "conftest) would prevent a whole class of this."
+    ))
+
+    story.append(PageBreak())
+
+    # ---- Known risks for Phase 4 (now fixed) ----
+    story.append(Paragraph("Pre-Existing Risks — Status: All Fixed (Day 2)", H1))
+    story.append(Paragraph(
+        "These five issues surfaced during the Day-1 red-team audit and "
+        "were held for Phase 4. All five landed in commit <font name='Courier'>a95d9ca</font> "
+        "on Day 2 (Apr 22 AM). Listed here for historical completeness.",
         MUTED_BODY,
     ))
 
@@ -492,55 +615,80 @@ def build_story() -> list:
     # ---- Roadmap ----
     story.append(Paragraph("What's Next", H1))
 
-    story.append(Paragraph("Phase 3 (Architecture) — remaining", H2))
+    story.append(Paragraph("Phase 3 — only 3.1 remaining", H2))
     story.append(Paragraph(
-        "These are bigger refactors. Recommended after a few trading days "
-        "with the Phase 1-3.5 changes in production.",
-        MUTED_BODY,
+        "Day 2 landed Phase 3.2 (dashboard split) and Phase 3.3 (stock_report "
+        "split). Phase 3.1 is the last structural item, and the most sensitive "
+        "one: FischerDaily's SignalClient consumes NennerEngine's API and "
+        "hard-codes <font name='Courier'>result[\"data\"]</font> / <font name='Courier'>result[\"count\"]</font> response shapes. "
+        "A query-layer refactor that restructures <font name='Courier'>api.py</font> could break "
+        "conviction scoring, Stanley brief, stock report, and auto-cancel "
+        "simultaneously on the FischerDaily side.",
+        BODY,
     ))
     story.append(bullet(
         "<b>3.1 Canonical query layer.</b> Promote signal_queries.py to "
         "queries.py and migrate all inline SQL from dashboard, stanley, "
-        "stock_report, alerts, auto_cancel, anomaly_check. Schema changes "
-        "today require grep-n-replace across 6+ files."
-    ))
-    story.append(bullet(
-        "<b>3.2 Split dashboard.py (1,144 lines)</b> into "
-        "dashboard/{data,components,pages,app,lifecycle}.py. Currently "
-        "no way to test stats logic without initializing the full Dash app."
-    ))
-    story.append(bullet(
-        "<b>3.3 Split stock_report.py (1,399 lines)</b> into data/html/llm "
-        "submodules. Can't test heat map logic without LLM, can't change "
-        "email template without touching signal logic."
+        "stock_report, alerts, auto_cancel, anomaly_check. <b>Must not touch "
+        "api.py response shapes.</b> Recommend doing this on a branch with a "
+        "before/after response-shape diff as the merge gate, and coordinating "
+        "with FischerDaily's staging tests."
     ))
 
-    story.append(Paragraph("Phase 4 — Hygiene", H2))
-    story.append(bullet(
-        "Delete stale <font name='Courier'>nenner_signals.db</font> at repo root (config points at "
-        "DataCenter copy) and the <font name='Courier'>WorkspaceDataCenternenner_signals.db*</font> "
-        "stray files from a botched sqlite command."
+    story.append(Paragraph("Phase 4 — status", H2))
+    story.append(Paragraph(
+        "All items from the original Day-1 Phase-4 list landed on Day 2 "
+        "except ruff/mypy enforcement (enabled in pyproject.toml but not "
+        "run in CI).",
+        MUTED_BODY,
     ))
     story.append(bullet(
-        "Add dependency pinning to pyproject.toml + ruff/mypy config."
+        "<font color='#2f855a'><b>[DONE]</b></font> Delete stale DB files at "
+        "repo root — commit 2dd09c7."
     ))
     story.append(bullet(
-        "Test coverage for the load-bearing logic: compute_current_state, "
-        "get_prices_with_signal_context, evaluate_price_alerts, "
-        "email_scheduler state machine."
+        "<font color='#2f855a'><b>[DONE]</b></font> Dependency pinning + "
+        "ruff/mypy config — commit 85fb2a4 (pyproject.toml now declares "
+        "16 pinned deps, [tool.ruff], [tool.mypy] with module overrides)."
     ))
     story.append(bullet(
-        "Fix the 5 pre-existing risks above (migration error masking, "
-        "_thread None crash, compute_current_state atomicity, IMAP spoof, "
-        "minute-window overflow)."
+        "<font color='#2f855a'><b>[DONE]</b></font> Test coverage for "
+        "compute_current_state (3dc8ebe), get_prices_with_signal_context "
+        "(85fb2a4), evaluate_price_alerts + _within_window (02a7c51), "
+        "email_scheduler state machine (85fb2a4)."
     ))
     story.append(bullet(
-        "Centralize magic numbers: PROXIMITY_DANGER_PCT, REFRESH_INTERVAL_MS, "
-        "_YF_CACHE_TTL, ALERT_COOLDOWN_MINUTES — currently scattered."
+        "<font color='#2f855a'><b>[DONE]</b></font> 5 pre-existing risks "
+        "hardened — commit a95d9ca."
     ))
     story.append(bullet(
-        "Decide on <font name='Courier'>positions.py</font> (disabled but still re-exported) and "
-        "<font name='Courier'>parser.py</font> (legacy regex, only used by tests)."
+        "<font color='#2f855a'><b>[DONE]</b></font> Magic numbers centralized "
+        "into config.py — commit 2dd09c7."
+    ))
+    story.append(bullet(
+        "<font color='#2f855a'><b>[DONE]</b></font> positions.py and parser.py "
+        "audit — decision: keep both. positions.py is intentionally dormant "
+        "(workbook path = None); parser.py mixes active helpers with "
+        "legacy-regex baseline for LLM parser comparison."
+    ))
+
+    story.append(Paragraph("Operational follow-ups (non-code)", H2))
+    story.append(bullet(
+        "<b>Apply NSSM AppRotateOnline=1 to running services.</b> The "
+        "install_service.ps1 update (commit ffb9bd9) covers future installs, "
+        "but the current services need the one-time admin command: "
+        "<font name='Courier'>nssm set NennerEngineDashboard AppRotateOnline 1</font> "
+        "(and same for Monitor + API)."
+    ))
+    story.append(bullet(
+        "<b>Enable ruff/mypy in a pre-commit hook or CI step.</b> Config "
+        "is in pyproject.toml; tooling isn't enforced anywhere yet. "
+        "<font name='Courier'>pip install -e .[dev]</font> to install them in the venv."
+    ))
+    story.append(bullet(
+        "<b>Truncate or archive the 158 MB dashboard_stderr.log</b> once "
+        "AppRotateOnline is live — it'll auto-rotate on the next write, but "
+        "the 158 MB historical copy sits there indefinitely."
     ))
 
     story.append(PageBreak())
@@ -553,6 +701,20 @@ def build_story() -> list:
     ))
 
     commits = [
+        # Day 2 — April 22 morning session
+        ("33169c9", "test: stop TestStanleyBriefGeneration from sending real emails"),
+        ("85fb2a4", "Phase 4: tests for prices/scheduler + pin deps + ruff/mypy config"),
+        ("ffb9bd9", "ops: enable NSSM AppRotateOnline so dashboard log doesn't grow unbounded"),
+        ("006ae6a", "fix(dashboard): rename app.py → dash_app.py to break shadow that crashed startup"),
+        ("437071f", "Phase 3.2: split dashboard.py into dashboard/ package"),
+        ("2dd09c7", "Phase 4 hygiene: stale DB cleanup, magic-number consolidation, dead-module audit"),
+        ("02a7c51", "test: cover _within_window + evaluate_price_alerts"),
+        ("3dc8ebe", "test: cover atomicity + breach-flip + DATABENTO exclusion in compute_current_state"),
+        ("a95d9ca", "Harden 5 pre-existing risks from refactor report"),
+        ("f841b59", "test: stop pinning live BAC direction + use rolling date"),
+        ("ca89510", "api: check_same_thread=False on per-request SQLite connection"),
+        ("a1784aa", "Phase 3.3: split stock_report.py into data/html/llm package"),
+        # Day 1 — April 21 overnight session
         ("36900e4", "load_env_once: strip surrounding quotes from values"),
         ("6cb6fd9", "Equity stream: session-local watchdog sentinel"),
         ("880b2ac", "Trim __init__.py: stop re-exporting legacy regex parser"),
@@ -601,10 +763,43 @@ def build_story() -> list:
     # ---- Test additions ----
     story.append(Paragraph("New Test Files", H1))
     tests = [
-        ("tests/test_llm_parser.py", "7", "Salvage edge cases — truncated mid-value, trailing comma, nested array, null literal, complete JSON roundtrip, garbage input, digit terminator regression"),
-        ("tests/test_cancel_breach.py", "10", "is_cancel_breached — ABOVE/BELOW strict inequality, equality boundary, None handling for all three inputs, unknown direction"),
-        ("tests/test_auto_cancel.py", "4", "Breach writes signals row with no emails pollution, dedupe default, regenerate=True overwrites, close-equal-to-cancel is not a breach"),
-        ("tests/test_tz.py", "4", "now_et returns tz-aware datetime, today_et returns date, DST observed in April (UTC-4), EST in January (UTC-5)"),
+        # Day 2 additions
+        ("tests/test_stock_report.py", "3",
+         "Byte-for-byte characterization via committed golden HTML/subject files. "
+         "Built pre-split to protect the Phase 3.3 refactor; frozen-time clock."),
+        ("tests/test_compute_current_state.py", "4",
+         "Risk-#2 atomicity rollback pin, already-breached-cancel → implied-reversal "
+         "flip, DATABENTO_EQUITY exclusion from cancel-breach check."),
+        ("tests/test_within_window.py", "11",
+         "Risk-#3 fix pin: hour-boundary span cases (target 8:58 firing at 9:00-9:02) "
+         "that would fail on the old MINUTE &lt;= m &lt; MINUTE+5 form."),
+        ("tests/test_evaluate_price_alerts.py", "12",
+         "DANGER vs WATCH band thresholds, abs() handling for both signal "
+         "directions, None-skip paths, alert-payload field contract."),
+        ("tests/test_dashboard_split.py", "15",
+         "Phase 3.2 safety net: import smoke, public API surface, layout "
+         "component-id coverage, card snapshots, data-layer fetchers. Includes "
+         "<font name='Courier'>test_lifecycle_app_module_is_a_module</font> — regression for the "
+         "name-shadow bug that crashed production."),
+        ("tests/test_get_prices_with_signal_context.py", "11",
+         "Dashboard-refresh + alert-tick critical path: pnl/cancel_dist/trigger_dist "
+         "math, SELL inversion, tickers filter, target UPSIDE/DOWNSIDE matching."),
+        ("tests/test_email_scheduler_state_machine.py", "18",
+         "One-fire-per-day dedup + weekday/window gating for stock report, "
+         "auto-cancel, watchdog, startup catch-up. Side effects patched at module level."),
+        # Day 1 additions
+        ("tests/test_llm_parser.py", "7",
+         "Salvage edge cases — truncated mid-value, trailing comma, nested array, "
+         "null literal, complete JSON roundtrip, garbage input, digit terminator regression"),
+        ("tests/test_cancel_breach.py", "10",
+         "is_cancel_breached — ABOVE/BELOW strict inequality, equality boundary, "
+         "None handling for all three inputs, unknown direction"),
+        ("tests/test_auto_cancel.py", "4",
+         "Breach writes signals row with no emails pollution, dedupe default, "
+         "regenerate=True overwrites, close-equal-to-cancel is not a breach"),
+        ("tests/test_tz.py", "4",
+         "now_et returns tz-aware datetime, today_et returns date, DST observed "
+         "in April (UTC-4), EST in January (UTC-5)"),
     ]
     test_rows = [["File", "Count", "Coverage"]]
     for path, count, desc in tests:
