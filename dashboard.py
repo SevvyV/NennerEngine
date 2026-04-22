@@ -792,9 +792,10 @@ def health():
     """
     import json
     from datetime import datetime
-    from zoneinfo import ZoneInfo
 
     from flask import Response
+
+    from nenner_engine.tz import ET as et
 
     threads: dict[str, object] = {}
     if _alert_monitor is not None:
@@ -827,7 +828,6 @@ def health():
             conn.close()
 
         last_date_str = row["last_date"] if row else None
-        et = ZoneInfo("America/New_York")
         now_et = datetime.now(et)
         ingestion["last_email_date"] = last_date_str
 

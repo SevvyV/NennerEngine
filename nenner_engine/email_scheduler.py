@@ -25,25 +25,9 @@ from .config import (
     SCHEDULER_TICK_SECONDS,
     NENNER_EXPECTED_DAYS, WATCHDOG_HOUR, WATCHDOG_MINUTE,
 )
+from .tz import now_et as _now_eastern
 
-log = logging.getLogger("nenner")
-
-# Only used locally — not shared
-DAILY_CHECK_TZ = "US/Eastern"
-
-
-# ---------------------------------------------------------------------------
-# Timezone helper (stdlib-only via zoneinfo, Python 3.9+)
-# ---------------------------------------------------------------------------
-
-def _now_eastern() -> datetime:
-    """Return current datetime in US/Eastern."""
-    try:
-        from zoneinfo import ZoneInfo
-        return datetime.now(ZoneInfo(DAILY_CHECK_TZ))
-    except ImportError:
-        # Fallback: assume UTC-5 (EST) -- close enough for scheduling
-        return datetime.utcnow() - timedelta(hours=5)
+log = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------

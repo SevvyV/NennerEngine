@@ -15,9 +15,8 @@ import logging
 import os
 import threading
 from datetime import datetime
-from zoneinfo import ZoneInfo
 
-_ET = ZoneInfo("America/New_York")
+from .tz import ET as _ET
 
 LEDGER_PATH = os.path.join("E:\\Workspace\\logs", "error_ledger.log")
 _MAX_BYTES = 5 * 1024 * 1024  # 5 MB

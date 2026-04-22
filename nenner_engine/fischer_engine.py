@@ -17,16 +17,15 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from enum import Enum
 from typing import Optional
-from zoneinfo import ZoneInfo
-
 import numpy as np
 from scipy.stats import norm
+
+from .tz import ET
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
-ET = ZoneInfo("America/New_York")
 MINUTES_PER_YEAR = 525_960  # 365.25 * 24 * 60
 TRADING_DAYS_PER_YEAR = 252
 
