@@ -398,6 +398,27 @@ def _seed_fischer_portfolios(conn: sqlite3.Connection):
 # Signal State Machine
 # ---------------------------------------------------------------------------
 
+def is_cancel_breached(cancel_direction: Optional[str],
+                       cancel_level: Optional[float],
+                       close: Optional[float]) -> bool:
+    """Nenner cancel-breach rule, centralized.
+
+    A BUY signal (cancel_direction='BELOW') is breached by a close strictly
+    below the cancel level. A SELL signal (cancel_direction='ABOVE') is
+    breached by a close strictly above. Equality is NOT a breach — Nenner's
+    rule requires the close to go through the level, not touch it.
+
+    Returns False if any input is None or the direction is unknown.
+    """
+    if cancel_direction is None or cancel_level is None or close is None:
+        return False
+    if cancel_direction == "ABOVE":
+        return close > cancel_level
+    if cancel_direction == "BELOW":
+        return close < cancel_level
+    return False
+
+
 def compute_current_state(conn: sqlite3.Connection):
     """Rebuild the current_state table from signal history.
 
@@ -437,6 +458,25 @@ def compute_current_state(conn: sqlite3.Connection):
     """).fetchall()
     rows = [r for r in rows if r["ticker"] in active_tickers]
 
+    # Pre-fetch latest closing prices for cancel-breach detection.
+    # If an ACTIVE signal's cancel level is already breached by the most
+    # recent daily close, treat it as an implied reversal immediately
+    # instead of waiting for the next auto-cancel run.
+    # IMPORTANT: Exclude DATABENTO_EQUITY — those are intraday midpoint
+    # snapshots, NOT daily closes.  Cancel levels require a confirmed
+    # close (per Nenner rules), so only settled daily bars count.
+    latest_prices: dict[str, float] = {}
+    for price_row in conn.execute("""
+        SELECT ticker, close FROM price_history
+        WHERE (ticker, date) IN (
+            SELECT ticker, MAX(date) FROM price_history
+            WHERE source != 'DATABENTO_EQUITY'
+            GROUP BY ticker
+        ) AND close IS NOT NULL
+        AND source != 'DATABENTO_EQUITY'
+    """).fetchall():
+        latest_prices[price_row["ticker"]] = price_row["close"]
+
     conn.execute("DELETE FROM current_state")
 
     for row in rows:
@@ -445,20 +485,37 @@ def compute_current_state(conn: sqlite3.Connection):
         signal_status = row["signal_status"]
 
         if signal_status == "ACTIVE":
-            conn.execute("""
-                INSERT OR REPLACE INTO current_state
-                (ticker, instrument, asset_class, effective_signal, effective_status,
-                 origin_price, cancel_direction, cancel_level,
-                 trigger_direction, trigger_level,
-                 implied_reversal, source_signal_id, last_updated, last_signal_date)
-                VALUES (?, ?, ?, ?, 'ACTIVE', ?, ?, ?, ?, ?, 0, ?, datetime('now'), ?)
-            """, (ticker, row["instrument"], row["asset_class"],
-                  signal_type, row["origin_price"],
-                  row["cancel_direction"], row["cancel_level"],
-                  row["trigger_direction"], row["trigger_level"],
-                  row["id"], row["date"]))
+            # Check if the cancel level is already breached by latest close
+            cancel_dir = row["cancel_direction"]
+            cancel_level = row["cancel_level"]
+            last_close = latest_prices.get(ticker)
+            already_breached = is_cancel_breached(cancel_dir, cancel_level, last_close)
 
-        elif signal_status == "CANCELLED":
+            if already_breached:
+                # Signal is ACTIVE per Nenner text but cancel is already
+                # breached — flip to implied reversal so the watchlist
+                # reflects reality instead of waiting for auto-cancel.
+                log.info(
+                    f"State rebuild: {ticker} {signal_type} cancel "
+                    f"{cancel_dir} {cancel_level} already breached "
+                    f"(close={last_close:.2f}) — marking implied reversal"
+                )
+                signal_status = "CANCELLED"
+            else:
+                conn.execute("""
+                    INSERT OR REPLACE INTO current_state
+                    (ticker, instrument, asset_class, effective_signal, effective_status,
+                     origin_price, cancel_direction, cancel_level,
+                     trigger_direction, trigger_level,
+                     implied_reversal, source_signal_id, last_updated, last_signal_date)
+                    VALUES (?, ?, ?, ?, 'ACTIVE', ?, ?, ?, ?, ?, 0, ?, datetime('now'), ?)
+                """, (ticker, row["instrument"], row["asset_class"],
+                      signal_type, row["origin_price"],
+                      row["cancel_direction"], row["cancel_level"],
+                      row["trigger_direction"], row["trigger_level"],
+                      row["id"], row["date"]))
+
+        if signal_status == "CANCELLED":
             # Cancellation implies reversal
             if signal_type == "BUY":
                 implied_signal = "SELL"

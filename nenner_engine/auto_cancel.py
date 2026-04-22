@@ -34,7 +34,10 @@ def check_auto_cancellations(
     Returns:
         List of dicts describing each auto-cancellation that was triggered.
     """
-    from .db import store_email, store_parsed_results, compute_current_state
+    from .db import (
+        store_email, store_parsed_results, compute_current_state,
+        is_cancel_breached,
+    )
     from .prices import fetch_yfinance_daily
 
     if price_date is None:
@@ -88,10 +91,13 @@ def check_auto_cancellations(
         if not cancel_dir or not cancel_level:
             continue
 
-        # Get daily closing price for this date
+        # Get daily closing price for this date.
+        # Exclude DATABENTO_EQUITY — those are intraday midpoint snapshots,
+        # not settled daily closes.  Cancel levels require a confirmed close.
         price_row = conn.execute("""
             SELECT close FROM price_history
             WHERE ticker = ? AND date = ?
+            AND source != 'DATABENTO_EQUITY'
             ORDER BY fetched_at DESC
             LIMIT 1
         """, (ticker, price_date)).fetchone()
@@ -104,16 +110,8 @@ def check_auto_cancellations(
         if close_price is None:
             continue
 
-        # Check if cancel level is breached
-        # ABOVE: breached if close > cancel_level (strict inequality)
-        # BELOW: breached if close < cancel_level (strict inequality)
-        breached = False
-        if cancel_dir == "ABOVE" and close_price > cancel_level:
-            breached = True
-        elif cancel_dir == "BELOW" and close_price < cancel_level:
-            breached = True
-
-        if not breached:
+        # Check if cancel level is breached (centralized rule in db.is_cancel_breached)
+        if not is_cancel_breached(cancel_dir, cancel_level, close_price):
             continue
 
         log.info(
