@@ -1,492 +1,14 @@
-"""
-Stanley's Daily Stock Report
-==============================
-Generates and emails a comprehensive daily report for focus stocks
-(AAPL, BAC, GOOG, MSFT, NVDA, TSLA) and equity index futures (ES, NQ, YM).
+"""Stock report HTML rendering — section builders and full assembly.
 
-Sections:
-  1. Portfolio Heat Map — quick-scan table with P/L, cancel distance, alerts
-  2. Inflection Alerts — stocks at/through cancel levels, fresh reversals, churn
-  3. Stock-by-Stock Detail — full context per instrument
-  4. Exit Timing Framework — systematic ranking by exit urgency
-  5. Stanley's Take — LLM-generated Druckenmiller-lens commentary
-
-Email delivery uses the same Gmail credentials as the IMAP client (SMTP).
+Pure presentation: takes pre-built stocks_data dicts (from data.py) plus
+optional Stanley-take text (from llm.py) and emits the HTML email body.
+No SQLite, no LLM, no email I/O.
 """
 
-import logging
-import os
-import sqlite3
-import time
-from datetime import datetime, date, timedelta
+from datetime import datetime
 from typing import Optional
 
-log = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------------
-
-FOCUS_STOCKS = ["AAPL", "BAC", "GOOG", "MSFT", "NVDA", "TSLA", "ES", "NQ"]
-
-STOCK_NAMES = {
-    "AAPL": "Apple Inc.",
-    "BAC": "Bank of America",
-    "GOOG": "Alphabet Inc.",
-    "MSFT": "Microsoft Corp.",
-    "NVDA": "NVIDIA Corp.",
-    "TSLA": "Tesla Inc.",
-    "ES": "S&P 500 Futures",
-    "NQ": "Nasdaq 100 Futures",
-}
-
-# Display names for tickers in the report (overrides raw ticker where shown)
-DISPLAY_TICKER = {
-    "ES": "S&P 500",
-    "NQ": "QQQ",
-}
-
-from .config import LLM_MODEL, LLM_MAX_TOKENS_REPORT, LLM_RETRY_ATTEMPTS
-
-# Danger/watch thresholds for cancel distance
-CANCEL_DANGER_PCT = 1.0
-CANCEL_WATCH_PCT = 2.5
-
-
-# ---------------------------------------------------------------------------
-# Data Gathering
-# ---------------------------------------------------------------------------
-
-def _get_cancel_trajectory(conn: sqlite3.Connection, ticker: str,
-                           days: int = 30) -> list[float]:
-    """Extract unique cancel level progression for a ticker over N days.
-
-    Returns a list of cancel levels in chronological order, deduped.
-    """
-    rows = conn.execute(
-        "SELECT cancel_level FROM signals "
-        "WHERE ticker = ? AND date >= date('now', ?) "
-        "AND cancel_level IS NOT NULL "
-        "ORDER BY date ASC, id ASC",
-        (ticker, f'-{days} days')
-    ).fetchall()
-
-    trajectory = []
-    prev = None
-    for r in rows:
-        lvl = r["cancel_level"]
-        if lvl != prev:
-            trajectory.append(lvl)
-            prev = lvl
-    return trajectory
-
-
-def _count_ntc(conn: sqlite3.Connection, ticker: str, days: int = 30) -> int:
-    """Count note_the_change signals in the last N days."""
-    row = conn.execute(
-        "SELECT COUNT(*) FROM signals "
-        "WHERE ticker = ? AND note_the_change = 1 "
-        "AND date >= date('now', ?)",
-        (ticker, f'-{days} days')
-    ).fetchone()
-    return row[0] if row else 0
-
-
-def _get_latest_target(conn: sqlite3.Connection, ticker: str) -> Optional[dict]:
-    """Get the most recent price target for a ticker."""
-    row = conn.execute(
-        "WITH recent_emails AS ("
-        "  SELECT id FROM emails ORDER BY date_sent DESC, id DESC LIMIT 5"
-        ") "
-        "SELECT pt.target_price, pt.direction, pt.condition "
-        "FROM price_targets pt "
-        "WHERE pt.ticker = ? "
-        "  AND EXISTS ("
-        "    SELECT 1 FROM price_targets pt2"
-        "    WHERE pt2.ticker = pt.ticker"
-        "      AND pt2.email_id IN (SELECT id FROM recent_emails)"
-        "  ) "
-        "ORDER BY pt.date DESC, pt.id DESC LIMIT 1",
-        (ticker,)
-    ).fetchone()
-    return dict(row) if row else None
-
-
-def _get_cycles(conn: sqlite3.Connection, ticker: str) -> list[dict]:
-    """Get latest cycle data for a ticker (up to 6 entries)."""
-    rows = conn.execute(
-        "SELECT timeframe, direction, until_description FROM cycles "
-        "WHERE ticker = ? ORDER BY date DESC, id DESC LIMIT 6",
-        (ticker,)
-    ).fetchall()
-    return [dict(r) for r in rows]
-
-
-def _assess_cycle_alignment(signal: str, cycles: list[dict]) -> str:
-    """Determine if cycles align with the current signal direction.
-
-    Returns: 'ALIGNED', 'CONFLICTING', 'MIXED', or 'NO DATA'
-    """
-    if not cycles:
-        return "NO DATA"
-
-    # Map signal to expected cycle direction
-    expected = "DOWN" if signal == "SELL" else "UP"
-
-    aligned = 0
-    conflicting = 0
-    for c in cycles:
-        d = (c.get("direction") or "").upper()
-        if d == expected:
-            aligned += 1
-        elif d and d != expected:
-            conflicting += 1
-
-    total = aligned + conflicting
-    if total == 0:
-        return "NO DATA"
-    ratio = aligned / total
-    if ratio >= 0.7:
-        return "ALIGNED"
-    if ratio <= 0.3:
-        return "CONFLICTING"
-    return "MIXED"
-
-
-def _compute_reward_risk(signal: str, price: float,
-                         cancel: float, target: float) -> Optional[float]:
-    """Compute reward-to-risk ratio from current price.
-
-    Returns R:R as a float (e.g. 2.5 means 2.5:1), or None if not computable.
-    """
-    if not all([price, cancel, target]):
-        return None
-
-    if signal == "SELL":
-        reward = price - target   # positive if target below price
-        risk = cancel - price     # positive if cancel above price
-    else:  # BUY
-        reward = target - price   # positive if target above price
-        risk = price - cancel     # positive if cancel below price
-
-    if reward <= 0:
-        return 0.0  # Already past target
-    if risk <= 0:
-        return None  # Cancel on same side as target — can't compute
-    return round(reward / risk, 1)
-
-
-def _get_target_progression(conn: sqlite3.Connection, ticker: str,
-                            days: int = 60) -> list[dict]:
-    """Get the target price progression for a ticker over N days.
-
-    Returns chronological list of distinct targets with context:
-      {date, target_price, direction, condition, reached}
-
-    This captures Nenner's staircase pattern: target reached → new target set.
-    """
-    rows = conn.execute(
-        "WITH recent_emails AS ("
-        "  SELECT id FROM emails ORDER BY date_sent DESC, id DESC LIMIT 5"
-        ") "
-        "SELECT pt.date, pt.target_price, pt.direction, pt.condition, pt.raw_text "
-        "FROM price_targets pt "
-        "WHERE pt.ticker = ? AND pt.date >= date('now', ?) "
-        "AND pt.target_price IS NOT NULL "
-        "AND EXISTS ("
-        "  SELECT 1 FROM price_targets pt2"
-        "  WHERE pt2.ticker = pt.ticker"
-        "    AND pt2.email_id IN (SELECT id FROM recent_emails)"
-        ") "
-        "ORDER BY pt.date ASC, pt.id ASC",
-        (ticker, f'-{days} days')
-    ).fetchall()
-
-    # Dedupe to unique (date, target_price) pairs
-    seen = set()
-    progression = []
-    for r in rows:
-        key = (r["date"], r["target_price"])
-        if key not in seen:
-            seen.add(key)
-            reached = ("reached" in (r["condition"] or "").lower()
-                       or "reached" in (r["raw_text"] or "").lower())
-            progression.append({
-                "date": r["date"],
-                "target_price": r["target_price"],
-                "direction": r["direction"],
-                "reached": reached,
-            })
-    return progression
-
-
-def _detect_target_staircase(progression: list[dict]) -> dict:
-    """Analyze target progression for staircase patterns.
-
-    Returns:
-        {
-            "targets_reached": int,   # how many targets were hit
-            "latest_target": float,   # current target
-            "previous_target": float, # last reached target (if any)
-            "is_staircasing": bool,   # target → reached → new target pattern
-            "staircase_direction": str, # "LOWER" or "HIGHER" or None
-        }
-    """
-    result = {
-        "targets_reached": 0,
-        "latest_target": None,
-        "previous_target": None,
-        "is_staircasing": False,
-        "staircase_direction": None,
-    }
-
-    if not progression:
-        return result
-
-    result["latest_target"] = progression[-1]["target_price"]
-
-    reached_targets = [p for p in progression if p["reached"]]
-    result["targets_reached"] = len(reached_targets)
-
-    if reached_targets:
-        result["previous_target"] = reached_targets[-1]["target_price"]
-
-        # Find non-reached targets set AFTER the last reached target
-        last_reached_date = reached_targets[-1]["date"]
-        newer_targets = [
-            p for p in progression
-            if p["date"] >= last_reached_date and not p["reached"]
-        ]
-
-        if newer_targets:
-            result["is_staircasing"] = True
-            new_tp = newer_targets[-1]["target_price"]
-            old_tp = reached_targets[-1]["target_price"]
-            if new_tp < old_tp:
-                result["staircase_direction"] = "LOWER"
-            elif new_tp > old_tp:
-                result["staircase_direction"] = "HIGHER"
-
-    return result
-
-
-def _get_signal_history(conn: sqlite3.Connection, ticker: str,
-                        limit: int = 8) -> list[dict]:
-    """Get recent signal history for a ticker."""
-    rows = conn.execute(
-        "SELECT date, signal_type, signal_status, origin_price, "
-        "cancel_level, note_the_change FROM signals "
-        "WHERE ticker = ? ORDER BY date DESC, id DESC LIMIT ?",
-        (ticker, limit)
-    ).fetchall()
-    return [dict(r) for r in rows]
-
-
-def _detect_inflection_flags(stock: dict) -> list[str]:
-    """Determine which inflection flags apply to a stock.
-
-    Returns list of flag strings like 'CANCEL_DANGER', 'REVERSAL', etc.
-    """
-    flags = []
-    cancel_dist = stock.get("cancel_dist_pct")
-    if cancel_dist is not None:
-        if abs(cancel_dist) < CANCEL_DANGER_PCT:
-            flags.append("CANCEL_DANGER")
-        elif abs(cancel_dist) < CANCEL_WATCH_PCT:
-            flags.append("CANCEL_WATCH")
-
-    if stock.get("implied_reversal"):
-        flags.append("REVERSAL")
-
-    ntc = stock.get("ntc_count_30d", 0)
-    if ntc >= 4:
-        flags.append("HIGH_CHURN")
-    elif ntc >= 3:
-        flags.append("CHURN")
-
-    rr = stock.get("reward_risk")
-    if rr is not None and rr < 1.0:
-        flags.append("LOW_RR")
-
-    target = stock.get("target_price")
-    price = stock.get("price")
-    if target and price:
-        target_dist = abs(target - price) / price * 100
-        if target_dist < 1.0:
-            flags.append("AT_TARGET")
-
-    risk_flag = stock.get("risk_flag", "")
-    if risk_flag == "AVOID":
-        flags.append("AVOID")
-
-    # Target staircase — previous target reached, new target set further out
-    staircase = stock.get("target_staircase", {})
-    if staircase.get("is_staircasing") and staircase.get("targets_reached", 0) >= 1:
-        flags.append("TARGET_REACHED")
-
-    # Trade aging — current trade is approaching or exceeding average duration
-    age_ratio = stock.get("trade_age_ratio")
-    if age_ratio is not None and age_ratio >= 0.85:
-        flags.append("TRADE_AGING")
-
-    return flags
-
-
-def gather_report_data(conn: sqlite3.Connection) -> list[dict]:
-    """Gather all data needed for the stock report.
-
-    Returns a list of enriched dicts, one per focus stock.
-    """
-    from .prices import get_current_prices, fetch_yfinance_daily
-    from .trade_stats import compute_instrument_stats, _risk_flag
-
-    # Fetch fresh prices for focus stocks
-    try:
-        fetch_yfinance_daily(conn, tickers=FOCUS_STOCKS, period="5d")
-    except Exception as e:
-        log.warning(f"Stock report: yfinance fetch failed: {e}")
-
-    prices = get_current_prices(conn, FOCUS_STOCKS, try_t1=True)
-    stats = compute_instrument_stats(conn, use_cache=False)
-
-    stocks_data = []
-
-    for ticker in FOCUS_STOCKS:
-        state = conn.execute(
-            "SELECT ticker, instrument, asset_class, effective_signal, "
-            "origin_price, cancel_direction, cancel_level, "
-            "trigger_level, implied_reversal, last_signal_date "
-            "FROM current_state WHERE ticker = ?",
-            (ticker,)
-        ).fetchone()
-
-        if not state:
-            continue
-
-        signal = state["effective_signal"]
-        origin = state["origin_price"]
-        cancel = state["cancel_level"]
-        price_info = prices.get(ticker, {})
-        price = price_info.get("price")
-        price_source = price_info.get("source", "")
-        price_as_of = price_info.get("as_of", "")
-
-        # P/L
-        pnl_pct = None
-        if origin and price and origin != 0:
-            if signal == "SELL":
-                pnl_pct = (origin - price) / origin * 100
-            else:
-                pnl_pct = (price - origin) / origin * 100
-
-        # Cancel distance
-        cancel_dist_pct = None
-        if cancel and price and price != 0:
-            cancel_dist_pct = (cancel - price) / price * 100
-
-        # Target
-        target_info = _get_latest_target(conn, ticker)
-        target_price = target_info["target_price"] if target_info else None
-        target_direction = target_info.get("direction") if target_info else None
-        target_condition = target_info.get("condition") if target_info else None
-
-        # Target distance
-        target_dist_pct = None
-        if target_price and price and price != 0:
-            target_dist_pct = abs(target_price - price) / price * 100
-
-        # R:R
-        reward_risk = _compute_reward_risk(signal, price, cancel, target_price)
-
-        # Cancel trajectory & NTC count
-        cancel_trajectory = _get_cancel_trajectory(conn, ticker, days=30)
-        ntc_count = _count_ntc(conn, ticker, days=30)
-
-        # Cycles
-        cycles = _get_cycles(conn, ticker)
-        cycle_alignment = _assess_cycle_alignment(signal, cycles)
-
-        # Trade stats
-        ticker_stats = stats.get(ticker)
-        risk_flag = _risk_flag(ticker_stats) if ticker_stats else ""
-
-        # Trade age (days since signal was given)
-        trade_age_days = None
-        if state["last_signal_date"]:
-            try:
-                sig_date = datetime.strptime(state["last_signal_date"], "%Y-%m-%d").date()
-                trade_age_days = (date.today() - sig_date).days
-            except (ValueError, TypeError):
-                pass
-
-        # Average trade duration for this instrument
-        avg_duration = ticker_stats.get("avg_duration") if ticker_stats else None
-        median_duration = ticker_stats.get("median_duration") if ticker_stats else None
-
-        # Trade age ratio: how far through the average trade duration are we?
-        trade_age_ratio = None
-        if trade_age_days is not None and avg_duration and avg_duration > 0:
-            trade_age_ratio = round(trade_age_days / avg_duration, 2)
-
-        # Signal history
-        signal_history = _get_signal_history(conn, ticker)
-
-        # Target progression (staircase detection)
-        target_progression = _get_target_progression(conn, ticker, days=60)
-        target_staircase = _detect_target_staircase(target_progression)
-
-        stock = {
-            "ticker": ticker,
-            "display_ticker": DISPLAY_TICKER.get(ticker, ticker),
-            "name": STOCK_NAMES.get(ticker, ticker),
-            "instrument": state["instrument"],
-            "signal": signal,
-            "origin_price": origin,
-            "cancel_level": cancel,
-            "cancel_direction": state["cancel_direction"],
-            "implied_reversal": bool(state["implied_reversal"]),
-            "last_signal_date": state["last_signal_date"],
-            "price": price,
-            "price_source": price_source,
-            "price_as_of": price_as_of,
-            "pnl_pct": round(pnl_pct, 2) if pnl_pct is not None else None,
-            "cancel_dist_pct": round(cancel_dist_pct, 2) if cancel_dist_pct is not None else None,
-            "target_price": target_price,
-            "target_direction": target_direction,
-            "target_condition": target_condition,
-            "target_dist_pct": round(target_dist_pct, 2) if target_dist_pct is not None else None,
-            "reward_risk": reward_risk,
-            "cancel_trajectory": cancel_trajectory,
-            "ntc_count_30d": ntc_count,
-            "cycles": cycles,
-            "cycle_alignment": cycle_alignment,
-            "trade_stats": ticker_stats,
-            "risk_flag": risk_flag,
-            "signal_history": signal_history,
-            "trade_age_days": trade_age_days,
-            "avg_duration": avg_duration,
-            "median_duration": median_duration,
-            "trade_age_ratio": trade_age_ratio,
-            "target_progression": target_progression,
-            "target_staircase": target_staircase,
-        }
-        stock["inflection_flags"] = _detect_inflection_flags(stock)
-        stocks_data.append(stock)
-
-    return stocks_data
-
-
-# ---------------------------------------------------------------------------
-# Email Infrastructure — delegated to postmaster
-# ---------------------------------------------------------------------------
-
-from .postmaster import send_email  # noqa: F401 — re-exported for backwards compat
-
-# ---------------------------------------------------------------------------
-# HTML Builders — Styles (canonical palette from postmaster)
-# ---------------------------------------------------------------------------
-
-from .postmaster import (  # noqa: E402
+from ..postmaster import (
     FONT as _FONT,
     CLR_BG as _CLR_BG,
     CLR_WHITE as _CLR_WHITE,
@@ -506,7 +28,12 @@ from .postmaster import (  # noqa: E402
     CLR_ROW_ALT as _CLR_ROW_ALT,
     wrap_document as _wrap_document,
 )
+from .data import CANCEL_DANGER_PCT, CANCEL_WATCH_PCT
 
+
+# ---------------------------------------------------------------------------
+# Formatting helpers
+# ---------------------------------------------------------------------------
 
 def _pnl_color(pnl: Optional[float]) -> str:
     if pnl is None:
@@ -532,7 +59,7 @@ def _ntc_bars(count: int) -> str:
     """Generate tightening bars (more = more tightening)."""
     if count == 0:
         return "&mdash;"
-    bars = "\u25bc" * min(count, 8)
+    bars = "▼" * min(count, 8)
     clr = _CLR_RED if count >= 4 else (_CLR_AMBER if count >= 3 else _CLR_MUTED)
     return f'<span style="color:{clr};">{bars}</span>'
 
@@ -564,7 +91,7 @@ def _build_header_html(stocks_data: list[dict]) -> str:
     if alerts:
         alert_summary = (
             f'<span style="color:{_CLR_AMBER};">'
-            f'\u26a0 {", ".join(alerts[:3])}</span>'
+            f'⚠ {", ".join(alerts[:3])}</span>'
         )
 
     return f'''
@@ -610,15 +137,15 @@ def _build_heat_map_html(stocks_data: list[dict]) -> str:
         flags = s.get("inflection_flags", [])
         alert_html = ""
         if "CANCEL_DANGER" in flags:
-            alert_html = f'<span style="color:{_CLR_RED}; font-weight:600; font-size:11px;">\u26a0 DANGER</span>'
+            alert_html = f'<span style="color:{_CLR_RED}; font-weight:600; font-size:11px;">⚠ DANGER</span>'
         elif "REVERSAL" in flags:
             alert_html = f'<span style="color:{_CLR_PURPLE}; font-weight:600; font-size:11px;">\U0001f504 REVERSAL</span>'
         elif "AT_TARGET" in flags:
             alert_html = f'<span style="color:{_CLR_GREEN}; font-weight:600; font-size:11px;">\U0001f3af TARGET</span>'
         elif "TRADE_AGING" in flags:
-            alert_html = f'<span style="color:{_CLR_AMBER}; font-weight:600; font-size:11px;">\u23f3 AGING</span>'
+            alert_html = f'<span style="color:{_CLR_AMBER}; font-weight:600; font-size:11px;">⏳ AGING</span>'
         elif "CANCEL_WATCH" in flags:
-            alert_html = f'<span style="color:{_CLR_AMBER}; font-weight:600; font-size:11px;">\u26a0 WATCH</span>'
+            alert_html = f'<span style="color:{_CLR_AMBER}; font-weight:600; font-size:11px;">⚠ WATCH</span>'
 
         implied_star = "*" if s["implied_reversal"] else ""
         signal_str = f'{s["signal"]}{implied_star}'
@@ -626,7 +153,7 @@ def _build_heat_map_html(stocks_data: list[dict]) -> str:
         # Target with direction arrow
         target_str = _fmt_price(s["target_price"])
         if s.get("target_price"):
-            arrow = "\u2193" if s.get("target_direction") == "DOWNSIDE" else "\u2191"
+            arrow = "↓" if s.get("target_direction") == "DOWNSIDE" else "↑"
             target_str = f'{arrow}{_fmt_price(s["target_price"])}'
 
         # Trade age display: "day X / avg Y"
@@ -694,7 +221,7 @@ def _build_heat_map_html(stocks_data: list[dict]) -> str:
         <tr><td style="padding-right:8px; white-space:nowrap; font-weight:600;">Entry</td>
             <td>Price at which the current signal was given (signal origin level)</td></tr>
         <tr><td style="padding-right:8px; white-space:nowrap; font-weight:600;">Target</td>
-            <td>Nenner's current price target &mdash; \u2191 upside / \u2193 downside.
+            <td>Nenner's current price target &mdash; ↑ upside / ↓ downside.
             When reached, Nenner typically sets a new target further out or reverses the signal</td></tr>
         <tr><td style="padding-right:8px; white-space:nowrap; font-weight:600;">P/L%</td>
             <td>Profit/Loss since signal entry &mdash; positive means the trade is in your favor</td></tr>
@@ -705,7 +232,7 @@ def _build_heat_map_html(stocks_data: list[dict]) -> str:
         <tr><td style="padding-right:8px; white-space:nowrap; font-weight:600;">Day</td>
             <td>Current trade age / average trade duration for this instrument (e.g. 6/14 = day 6 of a trade that typically lasts 14 days). <span style="color:{_CLR_RED};">Red</span> when at or past average, <span style="color:{_CLR_AMBER};">amber</span> when &ge;85% through</td></tr>
         <tr><td style="padding-right:8px; white-space:nowrap; font-weight:600;">NTC</td>
-            <td>\u25bc = number of cancel level changes (Note The Change) in last 30 days &mdash; more bars = Nenner is adjusting the cancel frequently, often a precursor to signal reversal</td></tr>
+            <td>▼ = number of cancel level changes (Note The Change) in last 30 days &mdash; more bars = Nenner is adjusting the cancel frequently, often a precursor to signal reversal</td></tr>
         <tr><td style="padding-right:8px; white-space:nowrap; font-weight:600;">*</td>
             <td>Implied reversal &mdash; prior signal was cancelled, current signal is inferred (cancellation = reversal in Nenner's system)</td></tr>
         <tr><td style="padding-right:8px; white-space:nowrap; font-weight:600;">R:R</td>
@@ -822,7 +349,7 @@ def _build_inflection_alerts_html(stocks_data: list[dict]) -> str:
     <tr><td style="padding:0 32px 16px;">
       <h2 style="margin:0 0 12px; font-size:16px; color:{_CLR_TEXT};
                  font-family:{_FONT};">
-        \u26a0\ufe0f Inflection Alerts
+        ⚠️ Inflection Alerts
       </h2>
       {alerts_html}
     </td></tr>'''
@@ -1164,131 +691,6 @@ def _build_footer_html(stocks_data: list[dict]) -> str:
 
 
 # ---------------------------------------------------------------------------
-# LLM Commentary
-# ---------------------------------------------------------------------------
-
-REPORT_SYSTEM_PROMPT = """\
-You are Stanley, a trading advisor modeled after Stanley Druckenmiller. \
-You write the "Stanley's Take" section of a daily stock report for a \
-portfolio manager who trades 6 individual stocks using the Nenner Cycle \
-Research system.
-
-## Druckenmiller Principles
-- Bet big when conviction is high; cut quickly when wrong
-- The best traders protect capital above all else
-- Timing exits is harder than timing entries — use systematic signals
-- Don't get married to a position — when the thesis changes, get out
-- Concentration beats diversification when you have an edge
-
-## Your Task
-Write 3-4 paragraphs analyzing today's portfolio state. Be SPECIFIC — \
-reference actual prices, levels, and percentages. Focus on:
-1. Which positions to hold vs exit, with clear reasoning
-2. Where the inflection points are (cancel proximity, cycle turns)
-3. Risk management — which positions have deteriorating R:R
-4. Trade duration — if a trade is approaching or past its average duration, the edge is fading; don't recommend initiating new trades late in the cycle
-5. Cross-stock observations (correlations, sector moves)
-
-## Formatting
-Write in HTML using only <b>, <i>, <br> tags. Use \\n for paragraph breaks.
-Keep the total under 2000 characters. Be direct and opinionated — do not \
-hedge with "consider" or "may want to." Give clear guidance.
-"""
-
-
-def _build_llm_context(stocks_data: list[dict]) -> str:
-    """Build a structured text summary for the LLM."""
-    lines = ["PORTFOLIO SNAPSHOT:"]
-    for s in stocks_data:
-        flags = ", ".join(s.get("inflection_flags", [])) or "none"
-        rr_val = s.get("reward_risk")
-        rr_str = f"{rr_val:.1f}:1" if rr_val is not None else "N/A"
-        implied_str = " (implied)" if s["implied_reversal"] else ""
-        lines.append(
-            f"  {s['ticker']} | {s['signal']}{implied_str} "
-            f"from {_fmt_price(s['origin_price']).replace('&mdash;', '—')} | "
-            f"Price: {_fmt_price(s['price']).replace('&mdash;', '—')} | "
-            f"P/L: {_fmt_pct(s['pnl_pct']).replace('&mdash;', '—')} | "
-            f"Cancel: {_fmt_price(s['cancel_level']).replace('&mdash;', '—')} "
-            f"({_fmt_pct(s['cancel_dist_pct']).replace('&mdash;', '—')} dist) | "
-            f"Target: {_fmt_price(s['target_price']).replace('&mdash;', '—')} | "
-            f"R:R: {rr_str} | "
-            f"NTC 30d: {s['ntc_count_30d']} | "
-            f"Cycles: {s['cycle_alignment']} | "
-            f"Flags: {flags}"
-        )
-
-        # Trade duration
-        age_days = s.get("trade_age_days")
-        avg_dur = s.get("avg_duration")
-        age_ratio = s.get("trade_age_ratio")
-        if age_days is not None:
-            dur_str = f"Day {age_days}"
-            if avg_dur:
-                dur_str += f", avg={avg_dur:.0f}d, ratio={age_ratio:.2f}" if age_ratio else f", avg={avg_dur:.0f}d"
-            lines.append(f"    Duration: {dur_str}")
-
-        ts = s.get("trade_stats")
-        if ts:
-            lines.append(
-                f"    Stats: Sharpe {ts['sharpe']:.2f}, WR {ts['win_rate']:.0f}%, "
-                f"Kelly {ts['kelly']:.0%}, {ts['trades']} trades, Flag: {s['risk_flag'] or 'none'}"
-            )
-
-        staircase = s.get("target_staircase", {})
-        if staircase.get("is_staircasing"):
-            prev_tp = staircase.get("previous_target")
-            new_tp = staircase.get("latest_target")
-            reached_n = staircase.get("targets_reached", 0)
-            sc_dir = staircase.get("staircase_direction", "")
-            lines.append(
-                f"    Target Staircase: {reached_n} target(s) reached in 60 days, "
-                f"prev={prev_tp}, new={new_tp}, direction={sc_dir}"
-            )
-
-    return "\n".join(lines)
-
-
-def _generate_stanley_take(stocks_data: list[dict], api_key: str) -> str:
-    """Call the Anthropic API for Stanley's interpretive commentary."""
-    import anthropic
-
-    client = anthropic.Anthropic(api_key=api_key)
-    context = _build_llm_context(stocks_data)
-
-    user_message = (
-        f"Here is today's portfolio state for the 6 focus stocks:\n\n"
-        f"{context}\n\n"
-        f"Write Stanley's Take for today's report."
-    )
-
-    last_error = None
-    for attempt in range(LLM_RETRY_ATTEMPTS + 1):
-        try:
-            message = client.messages.create(
-                model=LLM_MODEL,
-                max_tokens=LLM_MAX_TOKENS_REPORT,
-                system=[{
-                    "type": "text",
-                    "text": REPORT_SYSTEM_PROMPT,
-                    "cache_control": {"type": "ephemeral"},
-                }],
-                messages=[{"role": "user", "content": user_message}],
-            )
-            return message.content[0].text
-        except Exception as e:
-            last_error = e
-            if attempt < LLM_RETRY_ATTEMPTS:
-                wait = 2 ** (attempt + 1)
-                log.warning(f"Stock report LLM error (attempt {attempt + 1}), "
-                            f"retrying in {wait}s: {e}")
-                time.sleep(wait)
-
-    log.error(f"Stock report LLM failed after {LLM_RETRY_ATTEMPTS + 1} attempts: {last_error}")
-    return ""
-
-
-# ---------------------------------------------------------------------------
 # Report Assembly
 # ---------------------------------------------------------------------------
 
@@ -1336,64 +738,7 @@ def build_report_subject(stocks_data: list[dict]) -> str:
             urgent = s["ticker"]
             break
 
-    parts = [f"Stanley's Stock Report \u2014 {day}", f"{sell_count}S/{buy_count}B"]
+    parts = [f"Stanley's Stock Report — {day}", f"{sell_count}S/{buy_count}B"]
     if urgent:
-        parts.append(f"\u26a0 {urgent}")
+        parts.append(f"⚠ {urgent}")
     return " | ".join(parts)
-
-
-# ---------------------------------------------------------------------------
-# Entry Points
-# ---------------------------------------------------------------------------
-
-def generate_and_send_stock_report(
-    conn: sqlite3.Connection,
-    db_path: str,
-    send_email_flag: bool = True,
-    include_llm: bool = True,
-) -> str:
-    """Generate the full stock report and optionally send via email.
-
-    This is the primary integration point called from the scheduler or CLI.
-    Returns the generated HTML.
-    """
-    log.info("Generating Stanley's Stock Report...")
-
-    # 1. Gather data
-    stocks_data = gather_report_data(conn)
-    if not stocks_data:
-        log.warning("Stock report: no data available for focus stocks")
-        return ""
-
-    # 2. Generate LLM commentary
-    stanley_take = ""
-    if include_llm:
-        try:
-            from .llm_parser import _get_cached_api_key
-            api_key = _get_cached_api_key()
-            stanley_take = _generate_stanley_take(stocks_data, api_key)
-        except Exception as e:
-            log.error(f"Stock report LLM commentary failed: {e}")
-
-    # 3. Build HTML
-    html = build_stock_report_html(stocks_data, stanley_take)
-    subject = build_report_subject(stocks_data)
-
-    # 4. Send email
-    if send_email_flag:
-        send_email(subject, html)
-
-    log.info(f"Stock report generated: {len(html)} chars, "
-             f"{len(stocks_data)} stocks, LLM={'yes' if stanley_take else 'no'}")
-    return html
-
-
-def generate_stock_report_on_demand(conn: sqlite3.Connection,
-                                    db_path: str) -> str:
-    """Generate the report and send it (for CLI testing).
-
-    Returns the HTML body.
-    """
-    return generate_and_send_stock_report(
-        conn, db_path, send_email_flag=True, include_llm=True,
-    )
