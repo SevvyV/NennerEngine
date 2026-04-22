@@ -32,13 +32,14 @@ from dash import dash_table, dcc, html
 import dash_bootstrap_components as dbc
 from dash.dependencies import Input, Output
 
+from nenner_engine.config import DEFAULT_DB_PATH
 from nenner_engine.trade_stats import compute_instrument_stats
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
 
-DB_PATH = r"E:\Workspace\DataCenter\nenner_signals.db"
+DB_PATH = DEFAULT_DB_PATH
 WATCHLIST_ROW1 = ["TSLA", "BAC", "MSFT", "AAPL", "GOOG", "NVDA"]
 WATCHLIST_ROW2 = ["GDXJ", "GLD", "SLV", "USO", "UNG", "SOYB", "NEM"]
 WATCHLIST_ROW3 = ["ES", "NQ", "GBTC", "ETHE"]
@@ -65,8 +66,18 @@ _prev_close_date: str = ""
 
 
 def get_db() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
+    """Open a dashboard-scoped SQLite connection.
+
+    Every callback takes one of these per invocation; we set busy_timeout
+    so concurrent writers (AlertMonitor, EquityStream flush, scheduler) can
+    never trigger a hard "database is locked" error that silently blanks
+    the UI.  WAL mode is a database-level setting and was applied once at
+    startup by init_db(); we reassert it here as a no-op safety.
+    """
+    conn = sqlite3.connect(DB_PATH, timeout=5.0)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout=5000")
+    conn.execute("PRAGMA journal_mode=WAL")
     return conn
 
 
@@ -752,22 +763,85 @@ _equity_stream = None
 
 @app.server.route("/health")
 def health():
-    """Return JSON thread health for the external watchdog."""
+    """Return JSON thread + ingestion health for the external watchdog.
+
+    This dashboard intentionally does NOT own the email scheduler (that's
+    the external NennerEngineMonitor process). A missing scheduler inside
+    this process is normal — but the watchdog still needs to know the
+    ingestion pipeline is alive, so we probe the `emails` table for the
+    age of the most recent Nenner email and fail hard if it's stale.
+
+    Staleness thresholds:
+      - Mon/Wed/Fri after 3 PM ET: 72h (Nenner sends Mon/Wed/Fri)
+      - Otherwise: 120h (5-day cap)
+    """
     import json
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
     from flask import Response
 
-    threads = {}
-    if _alert_monitor and hasattr(_alert_monitor, "_thread"):
-        threads["alert_monitor"] = _alert_monitor._thread.is_alive() if _alert_monitor._thread else False
-    if _email_sched and hasattr(_email_sched, "_thread"):
-        threads["email_scheduler"] = _email_sched._thread.is_alive() if _email_sched._thread else False
-    if _equity_stream:
-        threads["equity_stream"] = _equity_stream.is_alive()
+    threads: dict[str, object] = {}
+    if _alert_monitor is not None:
+        t = getattr(_alert_monitor, "_thread", None)
+        threads["alert_monitor"] = bool(t and t.is_alive())
+    else:
+        threads["alert_monitor"] = "not_started"
 
-    all_healthy = all(threads.values()) if threads else True
+    if _email_sched is not None:
+        t = getattr(_email_sched, "_thread", None)
+        threads["email_scheduler"] = bool(t and t.is_alive())
+    else:
+        # Expected: external monitor owns scheduling. Don't claim healthy,
+        # don't claim dead — just report the arrangement.
+        threads["email_scheduler"] = "external"
+
+    if _equity_stream is not None:
+        threads["equity_stream"] = _equity_stream.is_alive()
+    else:
+        threads["equity_stream"] = "not_started"
+
+    ingestion: dict[str, object] = {}
+    try:
+        conn = get_db()
+        try:
+            row = conn.execute(
+                "SELECT MAX(date_sent) AS last_date FROM emails"
+            ).fetchone()
+        finally:
+            conn.close()
+
+        last_date_str = row["last_date"] if row else None
+        et = ZoneInfo("America/New_York")
+        now_et = datetime.now(et)
+        ingestion["last_email_date"] = last_date_str
+
+        if last_date_str:
+            last_dt = datetime.strptime(last_date_str, "%Y-%m-%d").replace(tzinfo=et)
+            age_hours = (now_et - last_dt).total_seconds() / 3600.0
+            ingestion["last_email_age_hours"] = round(age_hours, 1)
+
+            is_nenner_day_pm = now_et.weekday() in (0, 2, 4) and now_et.hour >= 15
+            threshold = 72.0 if is_nenner_day_pm else 120.0
+            ingestion["threshold_hours"] = threshold
+            ingestion["stale"] = age_hours > threshold
+        else:
+            ingestion["stale"] = True
+            ingestion["reason"] = "no emails ingested"
+    except Exception as e:
+        ingestion["error"] = str(e)
+        ingestion["stale"] = True
+
+    thread_ok = all(v is True or v == "external" for v in threads.values())
+    ingestion_ok = not ingestion.get("stale", False)
+    all_healthy = thread_ok and ingestion_ok
     status_code = 200 if all_healthy else 503
 
-    body = json.dumps({"healthy": all_healthy, "threads": threads})
+    body = json.dumps({
+        "healthy": all_healthy,
+        "threads": threads,
+        "ingestion": ingestion,
+    })
     return Response(body, status=status_code, content_type="application/json")
 
 
@@ -1090,6 +1164,19 @@ def main():
 
     print(f"Starting Nenner Signal Dashboard on http://127.0.0.1:{args.port}")
     print(f"Database: {DB_PATH}")
+
+    # Apply schema migrations once at startup — callback connections rely
+    # on the schema being current but shouldn't pay the migration cost on
+    # every request.
+    try:
+        from nenner_engine.db import init_db, migrate_db
+        _startup_conn = init_db(DB_PATH)
+        migrate_db(_startup_conn)
+        _startup_conn.close()
+        log.info("Schema migrations applied")
+    except Exception as e:
+        log.error(f"Schema migration failed at startup: {e}", exc_info=True)
+        raise
 
     # Start background monitor threads (alert evaluator + email scheduler).
     # Only in non-debug mode — Werkzeug's reloader forks a child process
