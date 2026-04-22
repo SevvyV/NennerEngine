@@ -11,6 +11,11 @@ from typing import Optional
 
 log = logging.getLogger("nenner")
 
+# Bump this when a migration is appended to the list in migrate_db().
+# Used to short-circuit the per-connection migration dance that was
+# previously paying a ~15-statement cost on every scheduler tick.
+CURRENT_SCHEMA_VERSION = 16
+
 
 # ---------------------------------------------------------------------------
 # Schema & Init
@@ -144,11 +149,44 @@ def init_db(db_path: str) -> sqlite3.Connection:
     return conn
 
 
+def _get_schema_version(conn: sqlite3.Connection) -> int:
+    """Return the stored schema version, or 0 if the tracker doesn't exist."""
+    try:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS schema_version ("
+            "id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL)"
+        )
+        row = conn.execute(
+            "SELECT version FROM schema_version WHERE id = 1"
+        ).fetchone()
+        if row is None:
+            return 0
+        return int(row[0] if not isinstance(row, sqlite3.Row) else row["version"])
+    except sqlite3.OperationalError:
+        return 0
+
+
+def _set_schema_version(conn: sqlite3.Connection, version: int) -> None:
+    conn.execute(
+        "INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, ?)",
+        (version,),
+    )
+    conn.commit()
+
+
 def migrate_db(conn: sqlite3.Connection):
     """Apply schema migrations to an existing database.
 
-    Safe to run multiple times -- each migration checks IF NOT EXISTS.
+    Short-circuits when the stored schema_version already matches
+    CURRENT_SCHEMA_VERSION (the common case on every scheduler tick and
+    every dashboard callback). On first run against an existing DB, the
+    version tracker is absent so we run through all migrations — each one
+    is idempotent (IF NOT EXISTS / try-pass on ALTER) so it's safe.
     """
+    stored = _get_schema_version(conn)
+    if stored >= CURRENT_SCHEMA_VERSION:
+        return
+
     migrations = [
         # v2: Add current_state table
         """CREATE TABLE IF NOT EXISTS current_state (
@@ -309,6 +347,12 @@ def migrate_db(conn: sqlite3.Connection):
             SELECT MAX(id) FROM stanley_briefs WHERE email_id IS NOT NULL GROUP BY email_id
         ) AND email_id IS NOT NULL""",
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_stanley_briefs_email_unique ON stanley_briefs(email_id) WHERE email_id IS NOT NULL",
+        # v16: Tag signals with their source ('nenner' for parsed emails,
+        # 'auto_cancel' for close-breach synthetic CANCELLED rows). Lets
+        # auto_cancel skip storing fake emails and makes its rows easy to
+        # identify/regenerate on bad-data correction.
+        "ALTER TABLE signals ADD COLUMN source TEXT NOT NULL DEFAULT 'nenner'",
+        "CREATE INDEX IF NOT EXISTS idx_signals_source_ticker_date ON signals(source, ticker, date)",
     ]
     for sql in migrations:
         try:
@@ -334,7 +378,11 @@ def migrate_db(conn: sqlite3.Connection):
     _seed_stanley_knowledge(conn)
     # Seed default Fischer portfolio on first run
     _seed_fischer_portfolios(conn)
-    log.info("Database migrations applied")
+    # Stamp the version so subsequent migrate_db() calls are no-ops
+    _set_schema_version(conn, CURRENT_SCHEMA_VERSION)
+    log.info(
+        f"Database migrated from v{stored} to v{CURRENT_SCHEMA_VERSION}"
+    )
 
 
 def _seed_stanley_knowledge(conn: sqlite3.Connection):
