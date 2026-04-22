@@ -418,7 +418,11 @@ def run_monitor(conn: sqlite3.Connection, interval: int = 60,
 
             # Health check: restart email scheduler if its thread died,
             # respecting exponential backoff between failed restart attempts.
-            if email_sched and not email_sched._thread.is_alive():
+            # _thread is None if EmailScheduler() succeeded but .start() raised
+            # before the thread attribute was assigned — treat that as "dead"
+            # so the restart path engages instead of crashing here every tick.
+            sched_thread = getattr(email_sched, "_thread", None)
+            if email_sched and (sched_thread is None or not sched_thread.is_alive()):
                 if sched_next_retry_at is None or now >= sched_next_retry_at:
                     log.error(
                         f"Email scheduler thread not alive "

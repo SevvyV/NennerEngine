@@ -357,8 +357,16 @@ def migrate_db(conn: sqlite3.Connection):
     for sql in migrations:
         try:
             conn.execute(sql)
-        except (sqlite3.OperationalError, sqlite3.IntegrityError):
-            pass  # Already applied or constraint conflict
+        except sqlite3.OperationalError as e:
+            # The only expected "already applied" error is duplicate-column
+            # from ALTER TABLE ADD COLUMN — every CREATE/INDEX in this list
+            # uses IF NOT EXISTS, every UPDATE/DELETE is idempotent. Any
+            # other OperationalError is a real schema bug; surfacing it is
+            # critical because the loop below stamps schema_version anyway,
+            # so a swallowed error becomes a silently-corrupt schema that
+            # never gets retried.
+            if "duplicate column" not in str(e).lower():
+                raise
     # Create views (idempotent)
     try:
         conn.execute("""
@@ -525,70 +533,75 @@ def compute_current_state(conn: sqlite3.Connection):
     """).fetchall():
         latest_prices[price_row["ticker"]] = price_row["close"]
 
-    conn.execute("DELETE FROM current_state")
+    # Atomic refresh: the DELETE and all INSERTs commit together, or a
+    # mid-loop exception rolls them back together. Without this, a crash
+    # would leave the implicit transaction open with the DELETE pending —
+    # a subsequent commit on the same connection from another code path
+    # would commit the DELETE alone and silently empty current_state.
+    with conn:
+        conn.execute("DELETE FROM current_state")
 
-    for row in rows:
-        ticker = row["ticker"]
-        signal_type = row["signal_type"]
-        signal_status = row["signal_status"]
+        for row in rows:
+            ticker = row["ticker"]
+            signal_type = row["signal_type"]
+            signal_status = row["signal_status"]
 
-        if signal_status == "ACTIVE":
-            # Check if the cancel level is already breached by latest close
-            cancel_dir = row["cancel_direction"]
-            cancel_level = row["cancel_level"]
-            last_close = latest_prices.get(ticker)
-            already_breached = is_cancel_breached(cancel_dir, cancel_level, last_close)
+            if signal_status == "ACTIVE":
+                # Check if the cancel level is already breached by latest close
+                cancel_dir = row["cancel_direction"]
+                cancel_level = row["cancel_level"]
+                last_close = latest_prices.get(ticker)
+                already_breached = is_cancel_breached(cancel_dir, cancel_level, last_close)
 
-            if already_breached:
-                # Signal is ACTIVE per Nenner text but cancel is already
-                # breached — flip to implied reversal so the watchlist
-                # reflects reality instead of waiting for auto-cancel.
-                log.info(
-                    f"State rebuild: {ticker} {signal_type} cancel "
-                    f"{cancel_dir} {cancel_level} already breached "
-                    f"(close={last_close:.2f}) — marking implied reversal"
-                )
-                signal_status = "CANCELLED"
-            else:
+                if already_breached:
+                    # Signal is ACTIVE per Nenner text but cancel is already
+                    # breached — flip to implied reversal so the watchlist
+                    # reflects reality instead of waiting for auto-cancel.
+                    log.info(
+                        f"State rebuild: {ticker} {signal_type} cancel "
+                        f"{cancel_dir} {cancel_level} already breached "
+                        f"(close={last_close:.2f}) — marking implied reversal"
+                    )
+                    signal_status = "CANCELLED"
+                else:
+                    conn.execute("""
+                        INSERT OR REPLACE INTO current_state
+                        (ticker, instrument, asset_class, effective_signal, effective_status,
+                         origin_price, cancel_direction, cancel_level,
+                         trigger_direction, trigger_level,
+                         implied_reversal, source_signal_id, last_updated, last_signal_date)
+                        VALUES (?, ?, ?, ?, 'ACTIVE', ?, ?, ?, ?, ?, 0, ?, datetime('now'), ?)
+                    """, (ticker, row["instrument"], row["asset_class"],
+                          signal_type, row["origin_price"],
+                          row["cancel_direction"], row["cancel_level"],
+                          row["trigger_direction"], row["trigger_level"],
+                          row["id"], row["date"]))
+
+            if signal_status == "CANCELLED":
+                # Cancellation implies reversal
+                if signal_type == "BUY":
+                    implied_signal = "SELL"
+                elif signal_type == "SELL":
+                    implied_signal = "BUY"
+                else:
+                    implied_signal = "NEUTRAL"
+
+                implied_origin = row["cancel_level"]
+                implied_cancel_dir = row["trigger_direction"]
+                implied_cancel_lvl = row["trigger_level"]
+
                 conn.execute("""
                     INSERT OR REPLACE INTO current_state
                     (ticker, instrument, asset_class, effective_signal, effective_status,
                      origin_price, cancel_direction, cancel_level,
                      trigger_direction, trigger_level,
                      implied_reversal, source_signal_id, last_updated, last_signal_date)
-                    VALUES (?, ?, ?, ?, 'ACTIVE', ?, ?, ?, ?, ?, 0, ?, datetime('now'), ?)
+                    VALUES (?, ?, ?, ?, 'ACTIVE', ?, ?, ?, NULL, NULL, 1, ?, datetime('now'), ?)
                 """, (ticker, row["instrument"], row["asset_class"],
-                      signal_type, row["origin_price"],
-                      row["cancel_direction"], row["cancel_level"],
-                      row["trigger_direction"], row["trigger_level"],
+                      implied_signal, implied_origin,
+                      implied_cancel_dir, implied_cancel_lvl,
                       row["id"], row["date"]))
 
-        if signal_status == "CANCELLED":
-            # Cancellation implies reversal
-            if signal_type == "BUY":
-                implied_signal = "SELL"
-            elif signal_type == "SELL":
-                implied_signal = "BUY"
-            else:
-                implied_signal = "NEUTRAL"
-
-            implied_origin = row["cancel_level"]
-            implied_cancel_dir = row["trigger_direction"]
-            implied_cancel_lvl = row["trigger_level"]
-
-            conn.execute("""
-                INSERT OR REPLACE INTO current_state
-                (ticker, instrument, asset_class, effective_signal, effective_status,
-                 origin_price, cancel_direction, cancel_level,
-                 trigger_direction, trigger_level,
-                 implied_reversal, source_signal_id, last_updated, last_signal_date)
-                VALUES (?, ?, ?, ?, 'ACTIVE', ?, ?, ?, NULL, NULL, 1, ?, datetime('now'), ?)
-            """, (ticker, row["instrument"], row["asset_class"],
-                  implied_signal, implied_origin,
-                  implied_cancel_dir, implied_cancel_lvl,
-                  row["id"], row["date"]))
-
-    conn.commit()
     log.info(f"Current state rebuilt: {len(rows)} instruments")
 
 

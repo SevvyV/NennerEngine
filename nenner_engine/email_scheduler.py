@@ -30,6 +30,22 @@ from .tz import now_et as _now_eastern
 log = logging.getLogger(__name__)
 
 
+def _within_window(now_et: datetime, target_hour: int, target_minute: int,
+                   window_minutes: int = 5) -> bool:
+    """True if now_et is in [target_hour:target_minute, +window_minutes).
+
+    Spans hour boundaries correctly: target_minute=58, window=5 covers
+    HH:58 through (HH+1):02 inclusive. The naive
+    `hour == H and MINUTE <= m < MINUTE + 5` form drops the next-hour
+    minutes silently — the +5 overflows past 60 and the hour gate then
+    rejects everything past HH:59.
+    """
+    target = now_et.replace(hour=target_hour, minute=target_minute,
+                            second=0, microsecond=0)
+    delta_seconds = (now_et - target).total_seconds()
+    return 0 <= delta_seconds < window_minutes * 60
+
+
 # ---------------------------------------------------------------------------
 # Trade Direction Change Detection
 # ---------------------------------------------------------------------------
@@ -392,8 +408,7 @@ class EmailScheduler:
 
     def _check_stock_report(self, now_et: datetime):
         """Check if it's time to send Stanley's Daily Stock Report (once per day)."""
-        if (now_et.hour == STOCK_REPORT_HOUR
-                and STOCK_REPORT_MINUTE <= now_et.minute < STOCK_REPORT_MINUTE + 5):
+        if _within_window(now_et, STOCK_REPORT_HOUR, STOCK_REPORT_MINUTE):
             today_str = now_et.strftime("%Y-%m-%d")
             # Skip weekends
             if now_et.weekday() >= 5:
@@ -406,8 +421,7 @@ class EmailScheduler:
 
     def _check_auto_cancel(self, now_et: datetime):
         """Check if it's time to run auto-cancel (4:30 PM ET, once per day)."""
-        if (now_et.hour == AUTO_CANCEL_HOUR
-                and AUTO_CANCEL_MINUTE <= now_et.minute < AUTO_CANCEL_MINUTE + 5):
+        if _within_window(now_et, AUTO_CANCEL_HOUR, AUTO_CANCEL_MINUTE):
             today_str = now_et.strftime("%Y-%m-%d")
             if self._last_auto_cancel_date != today_str:
                 self._last_auto_cancel_date = today_str
@@ -446,8 +460,7 @@ class EmailScheduler:
         """Alert if no Nenner email was parsed today (noon on Mon/Wed/Fri)."""
         if now_et.weekday() not in NENNER_EXPECTED_DAYS:
             return
-        if not (now_et.hour == WATCHDOG_HOUR
-                and WATCHDOG_MINUTE <= now_et.minute < WATCHDOG_MINUTE + 5):
+        if not _within_window(now_et, WATCHDOG_HOUR, WATCHDOG_MINUTE):
             return
         today_str = now_et.strftime("%Y-%m-%d")
         if self._last_watchdog_date == today_str:
@@ -506,9 +519,7 @@ class EmailScheduler:
                 # Daily 8:00 AM ET check
                 if self.daily_check:
                     today_str = now_et.strftime("%Y-%m-%d")
-                    if (now_et.hour == DAILY_CHECK_HOUR
-                            and now_et.minute >= DAILY_CHECK_MINUTE
-                            and now_et.minute < DAILY_CHECK_MINUTE + 5
+                    if (_within_window(now_et, DAILY_CHECK_HOUR, DAILY_CHECK_MINUTE)
                             and self._last_daily_date != today_str):
                         self._last_daily_date = today_str
                         self._do_check(f"daily_8am_ET ({today_str})")

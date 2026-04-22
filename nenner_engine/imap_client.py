@@ -119,10 +119,39 @@ def fetch_nenner_emails(imap: imaplib.IMAP4_SSL, since_date: str = None,
         if status == "OK" and msg_data[0] is not None:
             raw = msg_data[0][1]
             msg = BytesParser(policy=policy.default).parsebytes(raw)
+            # IMAP search filters by FROM header alone, which is spoofable.
+            # Gmail already ran SPF/DKIM/DMARC at delivery and stamped the
+            # verdict in Authentication-Results — surface it in logs so a
+            # spoofed signal injection would show up as a WARN entry rather
+            # than silently parse. Logging-only for now; flip to drop+alert
+            # once we've confirmed Nenner's outbound mail always passes.
+            if not _email_authenticated(msg):
+                log.warning(
+                    f"UID {uid.decode()} from {NENNER_SENDER} failed Gmail "
+                    f"auth check (spoof candidate) — processing anyway: "
+                    f"{msg.get('subject', '?')[:80]}"
+                )
             messages.append((uid.decode(), msg))
 
     log.info(f"Fetched {len(messages)} emails")
     return messages
+
+
+def _email_authenticated(msg, expected_domain: str = "charlesnenner.com") -> bool:
+    """Did Gmail's own SPF/DKIM/DMARC check pass for this message?
+
+    Trust Gmail's Authentication-Results header — it's authoritative for
+    mail delivered to this account and avoids pulling in a DKIM library
+    + DNS lookup. Returns False if header absent or doesn't show a pass.
+    """
+    auth = (msg.get("Authentication-Results", "") or "").lower()
+    if not auth:
+        return False
+    if "dmarc=pass" in auth:
+        return True
+    if "dkim=pass" in auth and expected_domain.lower() in auth:
+        return True
+    return False
 
 
 # ---------------------------------------------------------------------------
