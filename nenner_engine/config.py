@@ -39,7 +39,11 @@ def load_env_once() -> None:
                     if not line or line.startswith("#") or "=" not in line:
                         continue
                     key, val = line.split("=", 1)
-                    _os.environ.setdefault(key.strip(), val.strip())
+                    # Strip surrounding quotes — the old equity_stream
+                    # inline loader did this, and we don't want to lose
+                    # that forgiveness now that we've unified on this.
+                    val = val.strip().strip('"').strip("'")
+                    _os.environ.setdefault(key.strip(), val)
         except OSError:
             continue
         break
