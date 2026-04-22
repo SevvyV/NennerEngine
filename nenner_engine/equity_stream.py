@@ -176,8 +176,16 @@ class EquityStreamThread(threading.Thread):
         # shutdown for tens of seconds. This watchdog calls live.stop()
         # the moment _stop_event is set, which closes the socket and
         # breaks the iterator immediately.
+        #
+        # _session_done is a per-session sentinel so the watchdog exits
+        # when _run_stream returns, rather than accumulating one leaked
+        # blocking thread per reconnect cycle.
+        session_done = threading.Event()
+
         def _shutdown_watchdog():
-            self._stop_event.wait()
+            while not self._stop_event.wait(timeout=1.0):
+                if session_done.is_set():
+                    return
             try:
                 live.stop()
             except Exception:
@@ -248,6 +256,9 @@ class EquityStreamThread(threading.Thread):
                     last_flush = now
 
         finally:
+            # Release the watchdog so it doesn't sit blocked forever
+            # on _stop_event (one leaked thread per reconnect otherwise).
+            session_done.set()
             with contextlib.suppress(Exception):
                 live.stop()
             with contextlib.suppress(Exception):
