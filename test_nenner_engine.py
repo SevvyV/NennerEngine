@@ -12,6 +12,7 @@ import sqlite3
 import os
 import sys
 import unittest
+from datetime import date
 
 # Import from the engine
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -628,10 +629,14 @@ class TestLiveDatabaseValidation(unittest.TestCase):
         self.assertIsNotNone(row)
         self.assertIn(row["effective_signal"], ("BUY", "SELL"))
 
-    def test_bac_sell(self):
+    def test_bac_has_signal(self):
+        # Was test_bac_sell — pinned BAC to SELL from a Feb 18 strategy
+        # snapshot. Once Nenner reverses BAC, the assertion fails on live
+        # state. Match the rest of this class's pattern: just check there
+        # IS an active signal with origin/cancel data.
         row = self._get_state("BAC")
         self.assertIsNotNone(row)
-        self.assertEqual(row["effective_signal"], "SELL")
+        self.assertIn(row["effective_signal"], ("BUY", "SELL"))
         self.assertIsNotNone(row["origin_price"])
         self.assertIsNotNone(row["cancel_level"])
 
@@ -1855,8 +1860,11 @@ class TestCancelTrajectory(unittest.TestCase):
     def setUp(self):
         self.conn = init_db(":memory:")
         migrate_db(self.conn)
-        # Insert test signals with cancel level changes
-        today = "2026-02-23"
+        # Insert test signals with cancel level changes. Use today's date so
+        # the SQL filter `date >= date('now', '-30 days')` always sees them —
+        # a hardcoded date silently rolls out of the window and breaks the
+        # test once enough calendar time has passed.
+        today = date.today().isoformat()
         for i, (cancel, ntc) in enumerate([
             (255.0, 0), (260.0, 1), (267.0, 1), (266.0, 1)
         ]):
