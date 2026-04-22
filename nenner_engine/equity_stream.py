@@ -169,6 +169,27 @@ class EquityStreamThread(threading.Thread):
         )
 
         live = db.Live(key=_get_databento_key())
+
+        # Watchdog thread: the `for record in live:` iterator blocks on
+        # socket recv, which means a plain _stop_event check only runs
+        # when a record arrives. On low-volume weekends that can stall
+        # shutdown for tens of seconds. This watchdog calls live.stop()
+        # the moment _stop_event is set, which closes the socket and
+        # breaks the iterator immediately.
+        def _shutdown_watchdog():
+            self._stop_event.wait()
+            try:
+                live.stop()
+            except Exception:
+                pass
+
+        watchdog = threading.Thread(
+            target=_shutdown_watchdog,
+            name="equity-stream-watchdog",
+            daemon=True,
+        )
+        watchdog.start()
+
         try:
             live.subscribe(
                 dataset=Dataset.EQUS_MINI,
