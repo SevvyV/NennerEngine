@@ -78,6 +78,45 @@ def seed_price_history(conn, ticker="GC", close=2650.0,
     conn.commit()
 
 
+def seed_signal(conn, ticker="GC", instrument="Gold",
+                asset_class="Precious Metals",
+                signal_type="BUY", signal_status="ACTIVE",
+                origin_price=2650.0,
+                cancel_direction="BELOW", cancel_level=2580.0,
+                trigger_direction=None, trigger_level=None,
+                signal_date=None, email_id=None,
+                note_the_change=0, uses_hourly_close=0):
+    """Insert a row into signals. Returns the signal id.
+
+    If email_id is not given, an emails row is created automatically so
+    the FK and downstream JOINs work — compute_current_state reads from
+    signals only, but other queries traverse via emails.
+    """
+    if signal_date is None:
+        signal_date = date.today().isoformat()
+    if email_id is None:
+        cur = conn.execute(
+            "INSERT INTO emails (message_id, subject, date_sent, date_parsed, "
+            "email_type, raw_text) "
+            "VALUES (?, ?, ?, datetime('now'), 'morning_update', 'test')",
+            (f"test-{ticker}-{signal_date}", f"Test {ticker}", signal_date)
+        )
+        email_id = cur.lastrowid
+    cur = conn.execute(
+        "INSERT INTO signals (email_id, date, instrument, ticker, asset_class, "
+        "signal_type, signal_status, origin_price, cancel_direction, "
+        "cancel_level, trigger_direction, trigger_level, note_the_change, "
+        "uses_hourly_close, raw_text) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'test')",
+        (email_id, signal_date, instrument, ticker, asset_class,
+         signal_type, signal_status, origin_price,
+         cancel_direction, cancel_level, trigger_direction, trigger_level,
+         note_the_change, uses_hourly_close)
+    )
+    conn.commit()
+    return cur.lastrowid
+
+
 def seed_fischer_recommendation(conn, ticker="AAPL", strike=220.0,
                                 expiry=None, option_type="P",
                                 entry_price=225.0, premium_per_share=2.50,
