@@ -1,10 +1,50 @@
 """Centralized configuration — values shared across multiple modules."""
 
+import os as _os
 from pathlib import Path as _Path
 
 # ── Project Layout ──────────────────────────────────────────────
 PROJECT_ROOT = _Path(__file__).resolve().parent.parent
 DEFAULT_DB_PATH = str(_Path(r"E:\Workspace\DataCenter\nenner_signals.db"))
+
+
+# ── Environment Loading ─────────────────────────────────────────
+# Single canonical .env loader. Replaces the three near-duplicates that
+# previously lived in alert_dispatch.py, imap_client.py, and llm_parser.py.
+_ENV_LOADED = False
+
+
+def load_env_once() -> None:
+    """Populate os.environ from the project's .env file (first call only).
+
+    Safe to call from multiple modules and multiple threads — the actual
+    file read happens once per process. Uses setdefault() so real environment
+    variables always win over .env values.
+    """
+    global _ENV_LOADED
+    if _ENV_LOADED:
+        return
+
+    candidates = [
+        _Path(_os.getcwd()) / ".env",
+        PROJECT_ROOT / ".env",
+    ]
+    for env_path in candidates:
+        if not env_path.exists():
+            continue
+        try:
+            with open(env_path, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith("#") or "=" not in line:
+                        continue
+                    key, val = line.split("=", 1)
+                    _os.environ.setdefault(key.strip(), val.strip())
+        except OSError:
+            continue
+        break
+
+    _ENV_LOADED = True
 
 # ── Email Recipients ────────────────────────────────────────────
 REPORT_RECIPIENT = "sevagv@vartaniancapital.com"
