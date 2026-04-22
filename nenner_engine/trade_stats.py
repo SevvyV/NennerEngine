@@ -22,6 +22,7 @@ Scoring Model (Goldman Sachs Quant-Style):
 import sqlite3
 import logging
 import math
+import threading
 import time
 from datetime import datetime
 from statistics import mean, median, stdev
@@ -66,6 +67,9 @@ _cache_all: dict = {}          # cache for all instruments (dashboard)
 _cache_all_time: float = 0.0
 _cache_tradeable: dict = {}    # cache for tradeable only (Telegram report)
 _cache_tradeable_time: float = 0.0
+# Lock serialises the check/compute/store so concurrent Dash callbacks
+# don't stampede into redundant full recomputations on a cache miss.
+_cache_lock = threading.Lock()
 
 
 # ---------------------------------------------------------------------------
@@ -316,13 +320,19 @@ def compute_instrument_stats(conn: sqlite3.Connection,
     """
     global _cache_all, _cache_all_time, _cache_tradeable, _cache_tradeable_time
 
-    # Select correct cache based on whether we're filtering
-    if asset_filter is not None:
-        if use_cache and _cache_tradeable and (time.time() - _cache_tradeable_time) < _CACHE_TTL:
-            return _cache_tradeable
-    else:
-        if use_cache and _cache_all and (time.time() - _cache_all_time) < _CACHE_TTL:
-            return _cache_all
+    # Lock around the cache read so a concurrent writer can't hand us a
+    # torn dict. If we miss, we recompute outside the lock — two concurrent
+    # misses may both recompute (idempotent, same result) but neither will
+    # block the other or see a partial cache.
+    with _cache_lock:
+        if asset_filter is not None:
+            if (use_cache and _cache_tradeable
+                    and (time.time() - _cache_tradeable_time) < _CACHE_TTL):
+                return _cache_tradeable
+        else:
+            if (use_cache and _cache_all
+                    and (time.time() - _cache_all_time) < _CACHE_TTL):
+                return _cache_all
 
     all_trades = extract_trades_from_db(conn, asset_filter=asset_filter)
 
@@ -404,13 +414,15 @@ def compute_instrument_stats(conn: sqlite3.Connection,
             "max_duration": max_duration,
         }
 
-    # Store in the correct cache
-    if asset_filter is not None:
-        _cache_tradeable = stats
-        _cache_tradeable_time = time.time()
-    else:
-        _cache_all = stats
-        _cache_all_time = time.time()
+    # Store in the correct cache under the lock so readers never see a
+    # half-updated dict+timestamp pair.
+    with _cache_lock:
+        if asset_filter is not None:
+            _cache_tradeable = stats
+            _cache_tradeable_time = time.time()
+        else:
+            _cache_all = stats
+            _cache_all_time = time.time()
 
     return stats
 

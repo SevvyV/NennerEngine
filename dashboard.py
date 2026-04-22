@@ -60,9 +60,12 @@ COLOR_HEADER = "#adb5bd"
 MD_REFRESH_INTERVAL_MS = 900_000  # 15 minutes
 _DISPLAY_ALIAS = {"GOOGL": "GOOG"}  # DataBento → display ticker
 
-# Previous close cache (refreshed once per day)
+# Previous close cache (refreshed once per day). Lock protects read-modify-
+# write from concurrent Dash callback threads — the Market Data callback
+# is invoked on the Flask threadpool and a naive dict update was racy.
 _prev_close_cache: dict[str, float] = {}
 _prev_close_date: str = ""
+_prev_close_lock = threading.Lock()
 
 
 def get_db() -> sqlite3.Connection:
@@ -535,33 +538,45 @@ CHANGELOG_TABLE_STYLE_DATA_CONDITIONAL = [
 # ---------------------------------------------------------------------------
 
 def _get_prev_closes(tickers: list[str]) -> dict[str, float]:
-    """Fetch previous session close prices (cached once per day via yfinance)."""
+    """Fetch previous session close prices (cached once per day via yfinance).
+
+    Thread-safe for concurrent Dash callbacks — the fetch happens under
+    the lock only on a cache miss, and the happy path returns a defensive
+    copy without touching the network.
+    """
     global _prev_close_cache, _prev_close_date
     from datetime import date
     today = date.today().isoformat()
-    if _prev_close_date == today and _prev_close_cache:
-        return dict(_prev_close_cache)
 
+    # Fast path: hot cache, no lock needed for the happy case because dict
+    # reads are atomic under CPython — but we still copy under lock to
+    # avoid a rare torn read during an in-progress update.
+    with _prev_close_lock:
+        if _prev_close_date == today and _prev_close_cache:
+            return dict(_prev_close_cache)
+
+    # Cache miss — fetch outside the lock (network call), then acquire.
+    result: dict[str, float] = {}
     try:
         import yfinance as yf
         data = yf.download(tickers, period="5d", progress=False, threads=True)
         if data is not None and not data.empty:
             closes = data["Close"]
-            # Filter to dates strictly before today
             prev_data = closes[closes.index.strftime("%Y-%m-%d") < today]
             if not prev_data.empty:
                 last_row = prev_data.iloc[-1]
-                result = {}
                 for t in tickers:
                     col = t if t in last_row.index else None
                     if col and not math.isnan(last_row[col]):
                         result[t] = float(last_row[col])
-                _prev_close_cache = result
-                _prev_close_date = today
     except Exception as e:
         log.warning("Failed to fetch prev closes via yfinance: %s", e)
 
-    return dict(_prev_close_cache)
+    with _prev_close_lock:
+        if result:
+            _prev_close_cache = result
+            _prev_close_date = today
+        return dict(_prev_close_cache)
 
 
 # ---------------------------------------------------------------------------
