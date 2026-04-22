@@ -75,6 +75,7 @@ nssm set $serviceName AppStderr "$logDir\dashboard_stderr.log"
 nssm set $serviceName AppStdoutCreationDisposition 4
 nssm set $serviceName AppStderrCreationDisposition 4
 nssm set $serviceName AppRotateFiles 1
+nssm set $serviceName AppRotateOnline 1   # rotate while running, not just at startup
 nssm set $serviceName AppRotateSeconds 86400
 nssm set $serviceName AppRotateBytes 10485760
 
