@@ -1666,9 +1666,15 @@ class TestStanleyBriefGeneration(unittest.TestCase):
     def tearDown(self):
         self.conn.close()
 
+    # CRITICAL: generate_morning_brief lazy-imports send_email from
+    # postmaster and fires a real SMTP send to REPORT_RECIPIENT. Every test
+    # below MUST patch postmaster.send_email or each run will email the
+    # configured recipient. Bug observed 2026-04-22 — 6+ briefs landed in
+    # inbox over the day's test runs before this was caught.
+    @patch("nenner_engine.postmaster.send_email")
     @patch("nenner_engine.stanley._call_stanley_llm")
     @patch("nenner_engine.llm_parser._get_cached_api_key")
-    def test_generate_brief_basic(self, mock_key, mock_llm):
+    def test_generate_brief_basic(self, mock_key, mock_llm, _mock_send):
         """Brief generation with mocked LLM returns expected text."""
         mock_key.return_value = "test-key"
         mock_llm.return_value = "<b>Stanley's Morning Brief</b>\nTest brief"
@@ -1683,9 +1689,10 @@ class TestStanleyBriefGeneration(unittest.TestCase):
         self.assertIn("Stanley", brief)
         mock_llm.assert_called_once()
 
+    @patch("nenner_engine.postmaster.send_email")
     @patch("nenner_engine.stanley._call_stanley_llm")
     @patch("nenner_engine.llm_parser._get_cached_api_key")
-    def test_brief_stored_in_db(self, mock_key, mock_llm):
+    def test_brief_stored_in_db(self, mock_key, mock_llm, _mock_send):
         """Generated brief should be stored in stanley_briefs."""
         mock_key.return_value = "test-key"
         mock_llm.return_value = "<b>Test Brief</b>"
@@ -1702,9 +1709,10 @@ class TestStanleyBriefGeneration(unittest.TestCase):
         self.assertIsNotNone(latest)
         self.assertEqual(latest["brief_text"], "<b>Test Brief</b>")
 
+    @patch("nenner_engine.postmaster.send_email")
     @patch("nenner_engine.stanley._call_stanley_llm")
     @patch("nenner_engine.llm_parser._get_cached_api_key")
-    def test_brief_with_changes(self, mock_key, mock_llm):
+    def test_brief_with_changes(self, mock_key, mock_llm, _mock_send):
         """Brief with direction changes includes them in LLM context."""
         mock_key.return_value = "test-key"
         mock_llm.return_value = "<b>Brief with changes</b>"
