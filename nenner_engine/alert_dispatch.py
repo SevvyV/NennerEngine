@@ -17,36 +17,23 @@ import urllib.request
 from datetime import datetime, timedelta
 from typing import Optional
 
+from .config import load_env_once
+
 log = logging.getLogger("nenner")
 
 ALERT_COOLDOWN_MINUTES = 60
 
 
 # ---------------------------------------------------------------------------
-# Environment / Credentials
+# Credentials
 # ---------------------------------------------------------------------------
-
-def _load_env():
-    """Load .env file into os.environ."""
-    for search_dir in [os.getcwd(),
-                       os.path.dirname(os.path.dirname(os.path.abspath(__file__)))]:
-        env_path = os.path.join(search_dir, ".env")
-        if os.path.exists(env_path):
-            with open(env_path) as f:
-                for line in f:
-                    line = line.strip()
-                    if "=" in line and not line.startswith("#"):
-                        key, val = line.split("=", 1)
-                        os.environ.setdefault(key.strip(), val.strip())
-            break
-
 
 def get_telegram_config() -> tuple[Optional[str], Optional[str]]:
     """Return (bot_token, chat_id) from env vars, .env file, or Azure Key Vault.
 
     Returns (None, None) if not configured.
     """
-    _load_env()
+    load_env_once()
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
     chat_id = os.environ.get("TELEGRAM_CHAT_ID")
 
@@ -62,7 +49,7 @@ def get_telegram_config() -> tuple[Optional[str], Optional[str]]:
             credential = DefaultAzureCredential()
             client = SecretClient(vault_url=vault_url, credential=credential)
             token_secret = os.environ.get("TELEGRAM_TOKEN_SECRET", "Telegram-NennerBot")
-            chat_secret = os.environ.get("TELEGRAM_CHATID_SECRET", "telegram-chat-id")
+            chat_secret = os.environ.get("TELEGRAM_CHATID_SECRET", "nenner-engine-chat-id")
             token = client.get_secret(token_secret).value
             chat_id = client.get_secret(chat_secret).value
             if token and chat_id:

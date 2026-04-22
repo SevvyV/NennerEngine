@@ -12,7 +12,8 @@ import sqlite3
 import threading
 import time
 from datetime import date as date_mod
-from pathlib import Path
+
+from .config import load_env_once
 
 log = logging.getLogger("nenner")
 
@@ -26,26 +27,12 @@ STREAM_TICKERS = [
 
 def _get_databento_key() -> str:
     """Resolve DataBento equities API key (ENV → Azure Key Vault)."""
+    load_env_once()
     key = os.environ.get("DATABENTO_EQUITIES_API_KEY")
     if key:
         return key
 
-    # Try .env in project root
-    env_path = Path(__file__).resolve().parent.parent / ".env"
-    if env_path.exists():
-        for line in env_path.read_text().splitlines():
-            if line.strip().startswith("DATABENTO_EQUITIES_API_KEY="):
-                val = line.split("=", 1)[1].strip().strip('"').strip("'")
-                if val:
-                    return val
-
-    # Azure Key Vault
     vault_url = os.environ.get("AZURE_KEYVAULT_URL")
-    if not vault_url and env_path.exists():
-        for line in env_path.read_text().splitlines():
-            s = line.strip()
-            if s.startswith("AZURE_KEYVAULT_URL="):
-                vault_url = s.split("=", 1)[1].strip().strip('"').strip("'")
     if vault_url:
         try:
             from azure.identity import DefaultAzureCredential
@@ -87,8 +74,8 @@ class EquityStreamThread(threading.Thread):
         self._tickers = list(tickers or STREAM_TICKERS)
         self._healthy = False
         self._last_record_time: float = 0.0
-        # In-memory spot cache: {ticker: midpoint_price}
-        self._spots: dict[str, float] = {}
+        # In-memory spot cache: {ticker: {bid, ask, mid}}
+        self._spots: dict[str, dict] = {}
         self._lock = threading.Lock()
 
     @property
@@ -98,6 +85,11 @@ class EquityStreamThread(threading.Thread):
         if self._last_record_time == 0.0:
             return False
         return (time.monotonic() - self._last_record_time) < 60
+
+    def get_snapshot(self) -> dict[str, dict]:
+        """Return thread-safe copy of current quotes {ticker: {bid, ask, mid}}."""
+        with self._lock:
+            return {k: dict(v) for k, v in self._spots.items()}
 
     def run(self) -> None:
         log.info("EquityStreamThread: starting with %d tickers", len(self._tickers))
@@ -176,7 +168,7 @@ class EquityStreamThread(threading.Thread):
                     mid = ask
 
                 with self._lock:
-                    self._spots[symbol] = mid
+                    self._spots[symbol] = {"bid": bid, "ask": ask, "mid": mid}
                 self._last_record_time = time.monotonic()
 
                 # Flush to DB every 60 seconds
@@ -204,7 +196,8 @@ class EquityStreamThread(threading.Thread):
             today = date_mod.today().isoformat()
             conn = sqlite3.connect(self._db_path)
             try:
-                for ticker, price in spots.items():
+                for ticker, quote in spots.items():
+                    price = quote["mid"]
                     cur = conn.execute(
                         "UPDATE price_history "
                         "SET close = ?, fetched_at = datetime('now') "

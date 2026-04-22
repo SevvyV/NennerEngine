@@ -18,7 +18,7 @@ from .llm_parser import parse_email_signals_llm
 from .db import store_email, store_parsed_results
 from .anomaly_check import check_signal_anomalies, alert_anomalies
 
-from .config import NENNER_SENDER, IMAP_SERVER
+from .config import NENNER_SENDER, IMAP_SERVER, load_env_once
 
 log = logging.getLogger("nenner")
 
@@ -30,18 +30,7 @@ log = logging.getLogger("nenner")
 def get_credentials() -> tuple[str, str]:
     """Get Gmail credentials from env vars, .env file, or Azure Key Vault."""
 
-    # Try .env file first (look in project root, not package dir)
-    for search_dir in [os.getcwd(), os.path.dirname(os.path.dirname(os.path.abspath(__file__)))]:
-        env_path = os.path.join(search_dir, ".env")
-        if os.path.exists(env_path):
-            with open(env_path) as f:
-                for line in f:
-                    line = line.strip()
-                    if "=" in line and not line.startswith("#"):
-                        key, val = line.split("=", 1)
-                        os.environ.setdefault(key.strip(), val.strip())
-            break
-
+    load_env_once()
     gmail_addr = os.environ.get("GMAIL_ADDRESS")
     gmail_pass = os.environ.get("GMAIL_APP_PASSWORD")
 
