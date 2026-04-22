@@ -22,6 +22,17 @@ from .config import NENNER_SENDER, IMAP_SERVER, load_env_once
 
 log = logging.getLogger("nenner")
 
+# Email types that are expected to contain at least one signal. If one of
+# these parses to an empty signal list, treat it as an LLM failure rather
+# than as the email genuinely having no signals — re-parse once, then fall
+# back to rolling the email row back so the next IMAP poll can retry.
+_SIGNAL_BEARING_TYPES = frozenset({
+    "stocks_update",
+    "sunday_cycles",
+    "morning_update",
+    "weekly_overview",
+})
+
 
 # ---------------------------------------------------------------------------
 # Credentials
@@ -151,6 +162,39 @@ def process_email(conn, msg, source_id: str = None) -> bool:
 
     # Parse signals via LLM
     results = parse_email_signals_llm(body, email_date, email_id)
+
+    # Sanity check 0: a signal-bearing email type returning zero signals is
+    # almost always an LLM parse failure (transient API error, truncated
+    # response that salvaged to empty, etc.). Retry once. If the retry is
+    # still empty, roll back the email row so the next IMAP poll re-tries
+    # the whole thing instead of being blocked by the message_id dedupe.
+    if (email_type in _SIGNAL_BEARING_TYPES
+            and len(results.get("signals", [])) == 0):
+        log.warning(
+            f"{email_type} email returned 0 signals — retrying LLM parse "
+            f"(email_id={email_id})"
+        )
+        results = parse_email_signals_llm(body, email_date, email_id)
+        if len(results.get("signals", [])) == 0:
+            log.error(
+                f"Retry still returned 0 signals for email {email_id}: {subject[:60]} "
+                f"— rolling back so next poll can re-try"
+            )
+            conn.execute("DELETE FROM emails WHERE id = ?", (email_id,))
+            conn.commit()
+            try:
+                from nenner_engine.alert_dispatch import get_telegram_config, send_telegram
+                token, chat_id = get_telegram_config()
+                if token and chat_id:
+                    send_telegram(
+                        f"⚠️ NennerEngine: {email_type} parsed 0 signals "
+                        f"after retry. Email not marked read; next IMAP poll will "
+                        f"re-try.\nEmail: {subject[:80]}",
+                        token, chat_id,
+                    )
+            except Exception:
+                pass
+            return False  # caller must NOT mark \Seen
 
     # Sanity check: Stocks Cycle Charts emails should always have cycles.
     # If signals were parsed but cycles are empty, the LLM likely returned
