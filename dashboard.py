@@ -20,6 +20,7 @@ Signal data:
 
 import argparse
 import logging
+import math
 import os
 import sqlite3
 import threading
@@ -53,6 +54,14 @@ COLOR_IMPLIED = "#f39c12"  # amber for implied reversals
 COLOR_NTC = "#e74c3c"     # note-the-change highlight
 COLOR_CARD_BG = "#2b3035"
 COLOR_HEADER = "#adb5bd"
+
+# Market Data page config
+MD_REFRESH_INTERVAL_MS = 900_000  # 15 minutes
+_DISPLAY_ALIAS = {"GOOGL": "GOOG"}  # DataBento → display ticker
+
+# Previous close cache (refreshed once per day)
+_prev_close_cache: dict[str, float] = {}
+_prev_close_date: str = ""
 
 
 def get_db() -> sqlite3.Connection:
@@ -511,10 +520,70 @@ CHANGELOG_TABLE_STYLE_DATA_CONDITIONAL = [
 
 
 # ---------------------------------------------------------------------------
-# Layout
+# Previous Close Helper (for Market Data page change calculation)
 # ---------------------------------------------------------------------------
 
-def build_layout():
+def _get_prev_closes(tickers: list[str]) -> dict[str, float]:
+    """Fetch previous session close prices (cached once per day via yfinance)."""
+    global _prev_close_cache, _prev_close_date
+    from datetime import date
+    today = date.today().isoformat()
+    if _prev_close_date == today and _prev_close_cache:
+        return dict(_prev_close_cache)
+
+    try:
+        import yfinance as yf
+        data = yf.download(tickers, period="5d", progress=False, threads=True)
+        if data is not None and not data.empty:
+            closes = data["Close"]
+            # Filter to dates strictly before today
+            prev_data = closes[closes.index.strftime("%Y-%m-%d") < today]
+            if not prev_data.empty:
+                last_row = prev_data.iloc[-1]
+                result = {}
+                for t in tickers:
+                    col = t if t in last_row.index else None
+                    if col and not math.isnan(last_row[col]):
+                        result[t] = float(last_row[col])
+                _prev_close_cache = result
+                _prev_close_date = today
+    except Exception as e:
+        log.warning("Failed to fetch prev closes via yfinance: %s", e)
+
+    return dict(_prev_close_cache)
+
+
+# ---------------------------------------------------------------------------
+# Navigation
+# ---------------------------------------------------------------------------
+
+def _build_nav():
+    return dbc.Navbar(
+        dbc.Container([
+            dbc.NavbarBrand(
+                "NENNER ENGINE",
+                href="/",
+                style={"letterSpacing": "0.15em", "fontWeight": "700", "fontSize": "1.1rem"},
+            ),
+            dbc.Nav([
+                dbc.NavItem(dbc.NavLink("Signals", href="/",
+                    style={"letterSpacing": "0.05em", "fontSize": "0.9rem"})),
+                dbc.NavItem(dbc.NavLink("Market Data", href="/market-data",
+                    style={"letterSpacing": "0.05em", "fontSize": "0.9rem"})),
+            ], navbar=True),
+        ], fluid=True),
+        color="#1a1d21",
+        dark=True,
+        className="mb-0",
+        style={"borderBottom": "1px solid #444"},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Page: Signals (existing dashboard)
+# ---------------------------------------------------------------------------
+
+def _signals_page():
     return dbc.Container([
         # Auto-refresh interval
         dcc.Interval(id="refresh-interval", interval=REFRESH_INTERVAL_MS, n_intervals=0),
@@ -523,7 +592,7 @@ def build_layout():
         dbc.Row([
             dbc.Col(
                 html.Div([
-                    html.H3("NENNER SIGNAL ENGINE", className="mb-0",
+                    html.H3("SIGNAL DASHBOARD", className="mb-0",
                              style={"letterSpacing": "0.15em", "fontWeight": "700"}),
                     html.Small("Vartanian Capital Management",
                                style={"color": COLOR_HEADER, "letterSpacing": "0.05em"}),
@@ -602,6 +671,60 @@ def build_layout():
 
 
 # ---------------------------------------------------------------------------
+# Page: Live Market Data
+# ---------------------------------------------------------------------------
+
+def _market_data_page():
+    return dbc.Container([
+        dcc.Interval(id="md-refresh-interval", interval=MD_REFRESH_INTERVAL_MS, n_intervals=0),
+
+        dbc.Row([
+            dbc.Col(
+                html.Div([
+                    html.H4("LIVE MARKET DATA", className="mb-0",
+                             style={"color": COLOR_HEADER, "letterSpacing": "0.1em",
+                                    "fontWeight": "600"}),
+                    html.Small("DataBento EQUS.MINI  |  Pre-market + Regular session",
+                               style={"color": "#666"}),
+                ]),
+                width=True,
+            ),
+            dbc.Col(
+                dbc.Button(
+                    [html.I(className="fas fa-bolt me-2"), "Live Refresh"],
+                    id="md-refresh-button",
+                    color="success",
+                    size="sm",
+                    className="mt-1",
+                    style={"letterSpacing": "0.05em", "fontWeight": "600"},
+                ),
+                width="auto",
+                className="d-flex align-items-center",
+            ),
+        ], className="mb-3 mt-3 align-items-center"),
+
+        html.Div(id="md-table-container"),
+
+        html.Div(
+            html.Small(id="md-footer", style={"color": "#666"}),
+            className="text-center py-3",
+        ),
+    ], fluid=True, className="px-4")
+
+
+# ---------------------------------------------------------------------------
+# Layout (multi-page router)
+# ---------------------------------------------------------------------------
+
+def build_layout():
+    return html.Div([
+        dcc.Location(id="url", refresh=False),
+        _build_nav(),
+        html.Div(id="page-content"),
+    ])
+
+
+# ---------------------------------------------------------------------------
 # App
 # ---------------------------------------------------------------------------
 
@@ -612,6 +735,7 @@ app = dash.Dash(
         "https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css",
     ],
     title="Nenner Signal Engine",
+    suppress_callback_exceptions=True,
 )
 
 app.layout = build_layout
@@ -650,6 +774,13 @@ def health():
 # ---------------------------------------------------------------------------
 # Callbacks
 # ---------------------------------------------------------------------------
+
+@app.callback(Output("page-content", "children"), Input("url", "pathname"))
+def route_page(pathname):
+    if pathname == "/market-data":
+        return _market_data_page()
+    return _signals_page()
+
 
 @app.callback(
     Output("stats-bar", "children"),
@@ -812,6 +943,127 @@ def refresh_dashboard(_n, _btn):
 
 
     return stats_bar, wl_cards, pos_cards, stocks_table, macro_table, changelog_table, footer
+
+
+# ---------------------------------------------------------------------------
+# Market Data callback
+# ---------------------------------------------------------------------------
+
+MD_TABLE_STYLE_DATA_CONDITIONAL = [
+    # Positive change — green
+    {"if": {"filter_query": "{chg} > 0", "column_id": "chg"},
+     "color": COLOR_BUY, "fontWeight": "bold"},
+    {"if": {"filter_query": "{chg_pct} > 0", "column_id": "chg_pct"},
+     "color": COLOR_BUY, "fontWeight": "bold"},
+    # Negative change — red
+    {"if": {"filter_query": "{chg} < 0", "column_id": "chg"},
+     "color": COLOR_SELL, "fontWeight": "bold"},
+    {"if": {"filter_query": "{chg_pct} < 0", "column_id": "chg_pct"},
+     "color": COLOR_SELL, "fontWeight": "bold"},
+]
+
+
+@app.callback(
+    Output("md-table-container", "children"),
+    Output("md-footer", "children"),
+    Input("md-refresh-interval", "n_intervals"),
+    Input("md-refresh-button", "n_clicks"),
+)
+def refresh_market_data(_n, _btn):
+    from datetime import datetime
+
+    if _equity_stream is None:
+        return (
+            html.Div(
+                "Equity stream not running. Ensure DataBento credentials are configured.",
+                style={"color": "#888", "fontStyle": "italic", "padding": "2rem"},
+            ),
+            "",
+        )
+
+    snapshot = _equity_stream.get_snapshot()
+    if not snapshot:
+        return (
+            html.Div(
+                "Waiting for market data...",
+                style={"color": "#888", "fontStyle": "italic", "padding": "2rem"},
+            ),
+            "Stream is connected but no quotes received yet",
+        )
+
+    # Get previous session closes for change calculation
+    from nenner_engine.equity_stream import STREAM_TICKERS
+    prev_closes = _get_prev_closes(STREAM_TICKERS)
+
+    rows = []
+    for ticker, quote in snapshot.items():
+        display_ticker = _DISPLAY_ALIAS.get(ticker, ticker)
+        bid = quote["bid"]
+        ask = quote["ask"]
+        mid = quote["mid"]
+        prev = prev_closes.get(ticker)
+
+        chg = mid - prev if prev else None
+        chg_pct = (chg / prev * 100) if prev and prev != 0 else None
+
+        rows.append({
+            "ticker": display_ticker,
+            "bid": bid if bid > 0 else None,
+            "ask": ask if ask > 0 else None,
+            "last": mid,
+            "chg": round(chg, 2) if chg is not None else None,
+            "chg_pct": round(chg_pct, 2) if chg_pct is not None else None,
+            "_abs_chg_pct": abs(chg_pct) if chg_pct is not None else 0,
+        })
+
+    # Pre-sort by absolute change % descending (most volatile first)
+    rows.sort(key=lambda r: r["_abs_chg_pct"], reverse=True)
+    # Remove sort key from data
+    for r in rows:
+        del r["_abs_chg_pct"]
+
+    md_columns = [
+        {"name": "Ticker", "id": "ticker"},
+        {"name": "Bid", "id": "bid", "type": "numeric",
+         "format": {"specifier": ",.2f"}},
+        {"name": "Ask", "id": "ask", "type": "numeric",
+         "format": {"specifier": ",.2f"}},
+        {"name": "Last", "id": "last", "type": "numeric",
+         "format": {"specifier": ",.2f"}},
+        {"name": "Chg", "id": "chg", "type": "numeric",
+         "format": {"specifier": "+,.2f"}},
+        {"name": "Chg%", "id": "chg_pct", "type": "numeric",
+         "format": {"specifier": "+.2f"}},
+    ]
+
+    table = dash_table.DataTable(
+        id="md-board",
+        columns=md_columns,
+        data=rows,
+        sort_action="native",
+        page_size=30,
+        style_header=SIGNAL_TABLE_STYLE_HEADER,
+        style_cell={
+            **SIGNAL_TABLE_STYLE_CELL,
+            "fontSize": "1.5rem",
+            "padding": "12px 16px",
+        },
+        style_data_conditional=MD_TABLE_STYLE_DATA_CONDITIONAL,
+        style_table={"overflowX": "auto"},
+        style_as_list_view=True,
+    )
+
+    now = datetime.now()
+    healthy = _equity_stream.is_healthy
+    status = "LIVE" if healthy else "STALE"
+    status_color = COLOR_BUY if healthy else COLOR_SELL
+    footer = html.Span([
+        f"Last refresh: {now.strftime('%H:%M:%S')}  |  {len(rows)} instruments  |  Stream: ",
+        html.Span(status, style={"color": status_color, "fontWeight": "bold"}),
+        f"  |  Auto-refresh: {MD_REFRESH_INTERVAL_MS // 60_000} min",
+    ])
+
+    return table, footer
 
 
 # ---------------------------------------------------------------------------
