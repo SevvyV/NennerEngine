@@ -16,10 +16,15 @@ import unittest
 # Import from the engine
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from nenner_engine import (
-    RE_ACTIVE, RE_CANCELLED, RE_TRIGGER, RE_TARGET, RE_CYCLE, RE_NOTE_CHANGE,
-    parse_price, get_section_instrument, identify_instrument,
-    parse_email_signals, init_db, migrate_db, compute_current_state,
+    get_section_instrument, identify_instrument,
+    init_db, migrate_db, compute_current_state,
     store_parsed_results, classify_email,
+)
+# Legacy regex parser — still covered by this test file but no longer
+# part of the package's public API. Import directly from the submodule.
+from nenner_engine.parser import (
+    RE_ACTIVE, RE_CANCELLED, RE_TRIGGER, RE_TARGET, RE_CYCLE, RE_NOTE_CHANGE,
+    parse_price, parse_email_signals,
 )
 from nenner_engine.alerts import (
     evaluate_price_alerts,

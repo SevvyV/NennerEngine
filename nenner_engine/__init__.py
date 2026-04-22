@@ -18,14 +18,12 @@ from .instruments import (
     get_section_instrument,
 )
 from .parser import (
-    RE_ACTIVE,
-    RE_CANCELLED,
-    RE_TRIGGER,
-    RE_TARGET,
-    RE_CYCLE,
-    RE_NOTE_CHANGE,
-    parse_price,
-    parse_email_signals,
+    # Legacy regex-based parser has been superseded by llm_parser. The
+    # RE_* patterns, parse_price, and parse_email_signals are no longer
+    # re-exported from the package root; import them directly from
+    # nenner_engine.parser if you still need them (tests only, as of
+    # this writing). The two helpers below are still in the active
+    # pipeline and remain public.
     classify_email,
     extract_text_from_email,
 )
@@ -124,11 +122,9 @@ from .stock_report import (
 __all__ = [
     # Instruments
     "INSTRUMENT_MAP", "identify_instrument", "get_section_instrument",
-    # Parser (legacy regex — kept for reference)
-    "RE_ACTIVE", "RE_CANCELLED", "RE_TRIGGER", "RE_TARGET", "RE_CYCLE",
-    "RE_NOTE_CHANGE", "parse_price", "parse_email_signals", "classify_email",
-    "extract_text_from_email",
-    # LLM Parser (primary)
+    # Email classification / text extraction (still in active pipeline)
+    "classify_email", "extract_text_from_email",
+    # LLM Parser (primary signal/cycle/target extraction path)
     "parse_email_signals_llm", "get_anthropic_api_key",
     # Auto-Cancel
     "check_auto_cancellations",
