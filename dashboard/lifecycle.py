@@ -14,7 +14,7 @@ import logging
 import os
 import threading
 
-from . import app as _app_module
+from . import dash_app as _app_module
 from . import data as _data
 
 log = logging.getLogger("nenner_engine")

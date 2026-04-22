@@ -12,8 +12,13 @@ Module layout:
   data.py       — DB queries, watchlist config, prev-close cache
   components.py — UI builders (cards, stats bar) + color palette + table styles
   pages.py      — Page layouts (nav, signals, market data) + URL router
-  app.py        — Dash app instance + /health endpoint + callbacks
+  dash_app.py   — Dash app instance + /health endpoint + callbacks
   lifecycle.py  — main() entry point: argparse, migrations, threads, app.run
+
+Note: the file is named `dash_app.py` (not `app.py`) so the module name
+doesn't collide with the `app` symbol re-exported below — otherwise
+`from . import app` in sibling modules would resolve to the Dash
+instance instead of the module.
 """
 
 # Re-export the public surface so tests, scripts, and external callers
@@ -59,7 +64,7 @@ from .pages import (  # noqa: F401
     _signals_page,
     build_layout,
 )
-from .app import (  # noqa: F401
+from .dash_app import (  # noqa: F401
     MD_TABLE_STYLE_DATA_CONDITIONAL,
     app,
     refresh_dashboard,

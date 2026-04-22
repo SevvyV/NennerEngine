@@ -29,6 +29,27 @@ def test_dashboard_import_smoke():
     import dashboard  # noqa: F401
 
 
+def test_lifecycle_app_module_is_a_module():
+    """Regression for a real production crash: an earlier version of this
+    refactor named the Dash-app submodule `app.py` and re-exported the
+    Dash instance under the same name. That made `from . import app` in
+    sibling modules resolve to the Dash instance, so
+    `_app_module.app.run(...)` in lifecycle.main() crashed at startup with
+    AttributeError on a dash._obsolete wrapper. Pin the contract: the
+    submodule reference must be a module, not the Dash instance."""
+    import types
+    from dashboard import lifecycle
+    assert isinstance(lifecycle._app_module, types.ModuleType), (
+        f"lifecycle._app_module is {type(lifecycle._app_module).__name__}, "
+        f"expected a module — name shadowing in __init__ has reappeared"
+    )
+    # And the module must actually have the things lifecycle uses
+    for attr in ("app", "_alert_monitor", "_email_sched", "_equity_stream"):
+        assert hasattr(lifecycle._app_module, attr), (
+            f"lifecycle._app_module missing {attr}"
+        )
+
+
 def test_dashboard_exposes_app_and_main():
     """The launcher (install_service.ps1, restart_dashboard.bat) invokes
     `python dashboard.py`, which runs main(). The /health probe expects
