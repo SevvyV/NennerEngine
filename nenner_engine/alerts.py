@@ -449,7 +449,16 @@ def run_monitor(conn: sqlite3.Connection, interval: int = 60,
 
     cooldown_tracker: dict[tuple[str, str], datetime] = {}
     custom_alert_reset_date: Optional[str] = None
-    scheduler_death_logged = False  # only log once per death
+
+    # Scheduler-restart backoff state. When the email scheduler thread dies
+    # we don't want to tight-loop trying to restart it — a DB lock or vault
+    # rotation could cause restart() to throw every tick. Back off: 10s →
+    # 60s → 300s, and alert the admin after `_SCHED_ALERT_AFTER` failures.
+    _SCHED_BACKOFF_SEQUENCE = [10, 60, 300]
+    _SCHED_ALERT_AFTER = 3
+    sched_consecutive_failures = 0
+    sched_next_retry_at: Optional[datetime] = None
+    sched_admin_alerted = False
 
     log.info(f"Alert monitor started. Interval={interval}s, "
              f"evaluators={len(_evaluators)}")
@@ -463,17 +472,57 @@ def run_monitor(conn: sqlite3.Connection, interval: int = 60,
             now = datetime.now()
             log.debug(f"--- Alert check #{check_count} at {now.strftime('%H:%M:%S')} ---")
 
-            # Health check: restart email scheduler if its thread died
+            # Health check: restart email scheduler if its thread died,
+            # respecting exponential backoff between failed restart attempts.
             if email_sched and not email_sched._thread.is_alive():
-                if not scheduler_death_logged:
-                    log.error("Email scheduler thread died — restarting")
-                    scheduler_death_logged = True
-                try:
-                    email_sched.start()
-                    log.info("Email scheduler thread restarted successfully")
-                    scheduler_death_logged = False
-                except Exception as e:
-                    log.error(f"Email scheduler restart failed: {e}")
+                if sched_next_retry_at is None or now >= sched_next_retry_at:
+                    log.error(
+                        f"Email scheduler thread not alive "
+                        f"(consecutive failures={sched_consecutive_failures}) — restarting"
+                    )
+                    try:
+                        email_sched.start()
+                    except Exception as e:
+                        sched_consecutive_failures += 1
+                        backoff = _SCHED_BACKOFF_SEQUENCE[
+                            min(sched_consecutive_failures - 1,
+                                len(_SCHED_BACKOFF_SEQUENCE) - 1)
+                        ]
+                        sched_next_retry_at = now + timedelta(seconds=backoff)
+                        log.error(
+                            f"Email scheduler restart failed "
+                            f"({sched_consecutive_failures}/{_SCHED_ALERT_AFTER}): {e} "
+                            f"— next retry in {backoff}s"
+                        )
+                        if (sched_consecutive_failures >= _SCHED_ALERT_AFTER
+                                and not sched_admin_alerted):
+                            try:
+                                token, chat_id = get_telegram_config()
+                                if token and chat_id:
+                                    send_telegram(
+                                        f"🚨 NennerEngine: email scheduler "
+                                        f"restart failed {sched_consecutive_failures}x in a row.\n"
+                                        f"Last error: {e}\n"
+                                        f"Will keep retrying at {backoff}s.",
+                                        token, chat_id,
+                                    )
+                                sched_admin_alerted = True
+                            except Exception:
+                                pass
+                    else:
+                        if sched_consecutive_failures:
+                            log.info(
+                                f"Email scheduler recovered after "
+                                f"{sched_consecutive_failures} failure(s)"
+                            )
+                        sched_consecutive_failures = 0
+                        sched_next_retry_at = None
+                        sched_admin_alerted = False
+            elif email_sched and sched_consecutive_failures:
+                # Thread is alive again without us restarting it
+                sched_consecutive_failures = 0
+                sched_next_retry_at = None
+                sched_admin_alerted = False
 
             # Fetch prices
             rows = get_prices_with_signal_context(conn, try_t1=True)
