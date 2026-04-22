@@ -69,7 +69,6 @@ from .positions import (
 from .alerts import (
     AlertConfig,
     evaluate_price_alerts,
-    detect_signal_changes,
     run_monitor,
     show_alert_history,
     make_alert,
@@ -151,7 +150,7 @@ __all__ = [
     "get_positions_with_signal_context", "get_held_tickers",
     # Alerts
     "AlertConfig",
-    "evaluate_price_alerts", "detect_signal_changes",
+    "evaluate_price_alerts",
     "run_monitor", "show_alert_history",
     "make_alert", "register_evaluator",
     "send_toast", "send_telegram", "dispatch_alert",

@@ -224,62 +224,6 @@ def _eval_custom_price_alerts(conn, prices):
 
 
 # ---------------------------------------------------------------------------
-# Signal Change Detection (public API, not registered by default)
-# ---------------------------------------------------------------------------
-
-def detect_signal_changes(conn: sqlite3.Connection,
-                          last_seen_id: int) -> tuple[list[dict], int]:
-    """Detect new signals since last_seen_id.
-
-    Returns (alerts_list, new_max_id).
-    Not registered as an evaluator — call directly if needed.
-    """
-    rows = conn.execute("""
-        SELECT id, date, instrument, ticker, signal_type, signal_status,
-               origin_price, cancel_level, trigger_level
-        FROM signals WHERE id > ? ORDER BY id ASC
-    """, (last_seen_id,)).fetchall()
-
-    if not rows:
-        return [], last_seen_id
-
-    alerts = []
-    new_max_id = last_seen_id
-
-    for row in rows:
-        new_max_id = max(new_max_id, row["id"])
-        ticker = row["ticker"]
-        instrument = row["instrument"]
-        sig_type = row["signal_type"]
-        sig_status = row["signal_status"]
-        origin = row["origin_price"]
-        cancel = row["cancel_level"]
-
-        if sig_status == "ACTIVE":
-            origin_str = f"{origin:,.2f}" if origin else "?"
-            cancel_str = f"{cancel:,.2f}" if cancel else "?"
-            message = (
-                f"NEW SIGNAL {ticker} ({instrument}) {sig_type} activated "
-                f"from {origin_str}. Cancel at {cancel_str}"
-            )
-        elif sig_status == "CANCELLED":
-            cancel_str = f"{cancel:,.2f}" if cancel else "?"
-            message = (
-                f"CANCELLED {ticker} ({instrument}) {sig_type} cancelled "
-                f"at {cancel_str}. Implies reversal."
-            )
-        else:
-            message = f"SIGNAL {ticker} ({instrument}) {sig_type} {sig_status}"
-
-        alerts.append(make_alert(
-            ticker, instrument, "SIGNAL_CHANGE", "INFO", message,
-            origin, effective_signal=f"{sig_type}_{sig_status}",
-        ))
-
-    return alerts, new_max_id
-
-
-# ---------------------------------------------------------------------------
 # Alert History
 # ---------------------------------------------------------------------------
 

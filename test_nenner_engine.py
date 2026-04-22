@@ -23,7 +23,6 @@ from nenner_engine import (
 )
 from nenner_engine.alerts import (
     evaluate_price_alerts,
-    detect_signal_changes,
     is_cooled_down,
     log_alert,
     show_alert_history,
@@ -750,38 +749,6 @@ class TestAlertEngine(unittest.TestCase):
         self.assertIn("CANCEL_DANGER", types)
         self.assertNotIn("TRIGGER_DANGER", types)
         self.assertEqual(len(alerts), 1)
-
-    def test_signal_change_detection(self):
-        """New signals after baseline id should be detected."""
-        self.conn.execute(
-            "INSERT INTO emails (message_id, subject, date_sent, date_parsed, "
-            "email_type, raw_text) "
-            "VALUES ('test-1', 'Test', '2026-02-18', datetime('now'), "
-            "'morning_update', 'test')"
-        )
-        self.conn.commit()
-        baseline_id = 0
-
-        self.conn.execute(
-            "INSERT INTO signals (email_id, date, instrument, ticker, "
-            "asset_class, signal_type, signal_status, origin_price, "
-            "cancel_direction, cancel_level, note_the_change, "
-            "uses_hourly_close, raw_text) "
-            "VALUES (1, '2026-02-18', 'Gold', 'GC', 'Precious Metals', "
-            "'BUY', 'ACTIVE', 5000.0, 'BELOW', 4950.0, 0, 0, 'test')"
-        )
-        self.conn.commit()
-
-        alerts, new_max_id = detect_signal_changes(self.conn, baseline_id)
-        self.assertEqual(len(alerts), 1)
-        self.assertEqual(alerts[0]["ticker"], "GC")
-        self.assertEqual(alerts[0]["alert_type"], "SIGNAL_CHANGE")
-        self.assertGreater(new_max_id, baseline_id)
-
-        # Second call with new max_id should find nothing
-        alerts2, same_id = detect_signal_changes(self.conn, new_max_id)
-        self.assertEqual(len(alerts2), 0)
-        self.assertEqual(same_id, new_max_id)
 
     def test_cooldown_blocks_repeat(self):
         """Alert within cooldown period should be suppressed."""
