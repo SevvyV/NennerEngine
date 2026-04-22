@@ -16,7 +16,7 @@ import re
 import sqlite3
 from typing import Optional
 
-log = logging.getLogger("nenner")
+log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Workbook Configuration

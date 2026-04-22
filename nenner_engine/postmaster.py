@@ -33,7 +33,7 @@ from typing import Optional
 
 from .config import SMTP_SERVER, SMTP_PORT, SMTP_TIMEOUT
 
-log = logging.getLogger("nenner")
+log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Canonical Color Palette — change here, changes everywhere

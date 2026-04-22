@@ -9,7 +9,7 @@ import os
 import logging
 import sqlite3
 
-log = logging.getLogger("nenner")
+log = logging.getLogger(__name__)
 
 
 def show_status(conn: sqlite3.Connection):

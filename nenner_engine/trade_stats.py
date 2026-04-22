@@ -28,7 +28,7 @@ from datetime import datetime
 from statistics import mean, median, stdev
 from typing import Optional
 
-log = logging.getLogger("nenner")
+log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Configuration (mirrors signal_performance_report.py)

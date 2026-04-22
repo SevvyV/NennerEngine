@@ -125,11 +125,15 @@ def setup_logging(log_path: str):
 
     try:
         from nenner_engine.error_ledger import CentralErrorHandler
-        logging.getLogger("nenner").addHandler(
-            CentralErrorHandler(source="NENNER", package_prefix="nenner"),
+        # Attach the ledger handler at the package root so every
+        # nenner_engine.<module> logger propagates up and gets filtered.
+        logging.getLogger("nenner_engine").addHandler(
+            CentralErrorHandler(source="NENNER", package_prefix="nenner_engine"),
         )
     except Exception:
-        logging.getLogger("nenner").warning("Error ledger unavailable — continuing without it")
+        logging.getLogger("nenner_engine").warning(
+            "Error ledger unavailable — continuing without it"
+        )
 
 
 def main():
@@ -210,7 +214,7 @@ Examples:
     if args.api:
         from .api import create_app
         import uvicorn
-        log = logging.getLogger("nenner")
+        log = logging.getLogger(__name__)
         log.info(f"Starting signals API on port {args.api_port} (db: {args.db})")
         app = create_app(args.db)
         uvicorn.run(app, host="0.0.0.0", port=args.api_port, log_level="info")

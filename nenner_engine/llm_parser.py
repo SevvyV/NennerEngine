@@ -16,7 +16,7 @@ from .instruments import INSTRUMENT_MAP, get_instrument_map_json
 
 from .config import LLM_MODEL, load_env_once
 
-log = logging.getLogger("nenner")
+log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # System Prompt — The Signal Interpretation Rulebook

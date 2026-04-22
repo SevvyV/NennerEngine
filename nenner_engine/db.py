@@ -9,7 +9,7 @@ import logging
 from datetime import datetime
 from typing import Optional
 
-log = logging.getLogger("nenner")
+log = logging.getLogger(__name__)
 
 # Bump this when a migration is appended to the list in migrate_db().
 # Used to short-circuit the per-connection migration dance that was

@@ -13,7 +13,7 @@ from statistics import median as _median
 
 from .alert_dispatch import get_telegram_config, send_telegram
 
-log = logging.getLogger("nenner")
+log = logging.getLogger(__name__)
 
 # Fields to check and the deviation threshold (fraction, not percent)
 _CHECKED_FIELDS = ["cancel_level", "origin_price", "trigger_level"]

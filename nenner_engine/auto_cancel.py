@@ -13,7 +13,7 @@ import logging
 import sqlite3
 from datetime import datetime, date
 
-log = logging.getLogger("nenner")
+log = logging.getLogger(__name__)
 
 
 def check_auto_cancellations(

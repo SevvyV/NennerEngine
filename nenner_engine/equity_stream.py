@@ -15,7 +15,7 @@ from datetime import date as date_mod
 
 from .config import load_env_once
 
-log = logging.getLogger("nenner")
+log = logging.getLogger(__name__)
 
 # Tickers to stream — equities and ETFs only (no futures like ES/NQ).
 # GOOG is aliased to GOOGL for DataBento's symbology.

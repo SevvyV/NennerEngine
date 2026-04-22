@@ -20,7 +20,7 @@ from .anomaly_check import check_signal_anomalies, alert_anomalies
 
 from .config import NENNER_SENDER, IMAP_SERVER, load_env_once
 
-log = logging.getLogger("nenner")
+log = logging.getLogger(__name__)
 
 # Email types that are expected to contain at least one signal. If one of
 # these parses to an empty signal list, treat it as an LLM failure rather

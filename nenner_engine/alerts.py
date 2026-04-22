@@ -35,7 +35,7 @@ from .alert_dispatch import (  # noqa: F401 — re-export for backwards compat
     ALERT_COOLDOWN_MINUTES,
 )
 
-log = logging.getLogger("nenner")
+log = logging.getLogger(__name__)
 
 PROXIMITY_DANGER_PCT = 0.5    # Cancel distance < 0.5% = DANGER
 PROXIMITY_WARNING_PCT = 1.0   # Cancel distance < 1.0% = WATCH

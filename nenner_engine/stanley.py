@@ -18,7 +18,7 @@ from typing import Optional
 
 from .config import LLM_MODEL, LLM_MAX_TOKENS_STANLEY, LLM_RETRY_ATTEMPTS, REPORT_RECIPIENT
 
-log = logging.getLogger("nenner")
+log = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------

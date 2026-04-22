@@ -25,7 +25,7 @@ from .signal_queries import (
     snapshot_current_state,
 )
 
-log = logging.getLogger("nenner.api")
+log = logging.getLogger(__name__)
 
 # Module-level DB path — set by create_app()
 _db_path: str = ""

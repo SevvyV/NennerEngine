@@ -21,7 +21,7 @@ import time
 from datetime import datetime, date, timedelta
 from typing import Optional
 
-log = logging.getLogger("nenner")
+log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Configuration

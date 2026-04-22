@@ -19,7 +19,7 @@ from typing import Optional
 
 from .config import load_env_once
 
-log = logging.getLogger("nenner")
+log = logging.getLogger(__name__)
 
 ALERT_COOLDOWN_MINUTES = 60
 

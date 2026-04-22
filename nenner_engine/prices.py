@@ -14,7 +14,7 @@ import time
 from datetime import UTC, datetime, date, timedelta
 from typing import Optional
 
-log = logging.getLogger("nenner")
+log = logging.getLogger(__name__)
 
 # TTL cache for yFinance prices — avoids hitting the API every 30s
 _yf_cache: dict[str, float] = {}
