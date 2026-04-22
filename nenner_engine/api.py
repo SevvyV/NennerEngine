@@ -32,8 +32,14 @@ _db_path: str = ""
 
 
 def _get_conn():
-    """Yield a read-only SQLite connection per request."""
-    conn = sqlite3.connect(_db_path)
+    """Yield a read-only SQLite connection per request.
+
+    check_same_thread=False is safe here: each request gets its own
+    connection (no sharing), but FastAPI's sync-handler threadpool can
+    schedule the generator's finally block on a different thread than
+    the yield. Without this flag, conn.close() raises ProgrammingError.
+    """
+    conn = sqlite3.connect(_db_path, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=5000")
