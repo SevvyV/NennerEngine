@@ -121,6 +121,56 @@ class TestProcessEmailAtomicity(unittest.TestCase):
                          "email row should have been rolled back")
         self.assertEqual(self._signal_count(), 0)
 
+    def test_llm_runs_outside_write_transaction(self):
+        """Phase 3.1 invariant: parse_email_signals_llm must NOT be called
+        while a write transaction is open. The Anthropic round-trip is
+        5-30s; holding the SQLite write lock that long blocks the equity
+        stream and other concurrent writers. Any future refactor that
+        accidentally moves the LLM back inside BEGIN is caught here."""
+        from nenner_engine import imap_client
+
+        body = "Gold cycle update " + "x" * 100
+        msg = _build_msg("Stocks Cycle Charts", body, "msg-llm-tx-check")
+
+        observed = {"in_tx_during_llm": None}
+
+        def fake_llm(body_arg, email_date, email_id=None):
+            observed["in_tx_during_llm"] = self.conn.in_transaction
+            return {
+                "signals": [{
+                    "email_id": email_id, "date": "2026-04-27",
+                    "instrument": "Gold", "ticker": "GC",
+                    "asset_class": "Precious Metals",
+                    "signal_type": "BUY", "signal_status": "ACTIVE",
+                    "origin_price": 2900.0,
+                    "cancel_direction": "BELOW", "cancel_level": 2850.0,
+                    "trigger_direction": None, "trigger_level": None,
+                    "price_target": None, "target_direction": None,
+                    "note_the_change": 0, "uses_hourly_close": 0,
+                    "raw_text": "test",
+                }],
+                "cycles": [{
+                    "email_id": email_id, "date": "2026-04-27",
+                    "instrument": "Gold", "ticker": "GC",
+                    "timeframe": "daily", "direction": "UP",
+                    "until_description": "", "raw_text": "test",
+                }],
+                "price_targets": [],
+            }
+
+        with patch.object(imap_client, "parse_email_signals_llm", side_effect=fake_llm), \
+             patch.object(imap_client, "classify_email", return_value="stocks_update"):
+            ok = imap_client.process_email(self.conn, msg, source_id="tx-check")
+
+        self.assertTrue(ok)
+        self.assertIs(observed["in_tx_during_llm"], False,
+                      "LLM was called while a write transaction was open — "
+                      "this holds the SQLite write lock for the duration of "
+                      "the API call and starves concurrent writers.")
+        # And the row really did land
+        self.assertEqual(self._email_count(), 1)
+        self.assertEqual(self._signal_count(), 1)
+
     def test_duplicate_message_id_does_not_open_lasting_transaction(self):
         """A duplicate-message_id short-circuit must commit (no-op) so
         the connection isn't left in a wedged-transaction state for the
