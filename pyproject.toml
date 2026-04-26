@@ -47,6 +47,10 @@ packages = ["nenner_engine", "dashboard"]
 [tool.pytest.ini_options]
 testpaths = ["tests", "."]
 addopts = "-v --tb=short"
+markers = [
+    "integration: tests that require external state (live shared DB, network, real Anthropic API). CI excludes these via -m 'not integration'.",
+    "slow: tests that take >1s. Use 'pytest -m \"not slow\"' to skip during fast feedback loops.",
+]
 
 # ─── Linting (ruff) ─────────────────────────────────────────────────────────
 # Minimal config — enables ruff with sane defaults. We don't auto-fix or

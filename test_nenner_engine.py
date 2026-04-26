@@ -14,6 +14,8 @@ import sys
 import unittest
 from datetime import date
 
+import pytest
+
 # Import from the engine
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from nenner_engine import (
@@ -580,12 +582,17 @@ class TestSignalStateMachine(unittest.TestCase):
         self.assertEqual(rows[0], 0)
 
 
+@pytest.mark.integration
 class TestLiveDatabaseValidation(unittest.TestCase):
     """Validate state machine against the live production database.
 
     These tests run against the real nenner_signals.db and verify that
     the computed state matches the Feb 18, 2026 signals from the
     strategy document. Skip if database doesn't exist.
+
+    Marked ``integration`` — CI excludes these via -m 'not integration'
+    because the live DB does not exist on the runner. They still run
+    locally on every full suite invocation.
     """
 
     @classmethod

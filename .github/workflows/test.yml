@@ -1,0 +1,47 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # Install only what tests actually need. Skipping the heavy
+          # transitive deps (xlwings is Windows-only via COM, dash/uvicorn
+          # not exercised by unit tests) keeps CI fast and Linux-friendly.
+          pip install \
+            "anthropic>=0.83.0,<1.0" \
+            "fastapi>=0.135.2,<1.0" \
+            "yfinance>=1.2.0,<2.0" \
+            "pandas>=3.0.1,<4.0" \
+            "numpy>=2.4.2,<3.0" \
+            "requests>=2.32.5,<3.0" \
+            "tzdata>=2025.3" \
+            "pytest>=9.0,<10.0" \
+            "pytest-cov>=7.0,<8.0"
+
+      - name: Run pytest (unit suite)
+        # -m "not integration" excludes tests that touch the live shared
+        # DB at E:\Workspace\DataCenter\nenner_signals.db, which doesn't
+        # exist on the runner. CI gates on the unit tier only.
+        run: |
+          python -m pytest tests/ test_nenner_engine.py \
+            -m "not integration" \
+            --tb=short
