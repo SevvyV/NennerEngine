@@ -310,17 +310,23 @@ def fetch_yfinance_daily(conn: sqlite3.Connection,
                 if math.isfinite(latest) and latest > 0:
                     latest_prices[canonical] = latest
 
-    # Persist to DB
-    for ticker, rows in prices_to_store.items():
-        for row in rows:
-            try:
-                conn.execute("""
-                    INSERT OR REPLACE INTO price_history
-                        (ticker, date, close, source)
-                    VALUES (?, ?, ?, 'yfinance')
-                """, (ticker, row["date"], row["close"]))
-            except sqlite3.Error as e:
-                log.debug(f"DB insert error for {ticker}: {e}")
+    # Persist to DB. executemany batches the INSERTs into a single
+    # statement-prepare cycle — for a typical 80-ticker × 5-day fetch
+    # that's ~400 rows, dropping per-row overhead by an order of magnitude.
+    batch = [
+        (ticker, row["date"], row["close"])
+        for ticker, rows in prices_to_store.items()
+        for row in rows
+    ]
+    if batch:
+        try:
+            conn.executemany(
+                "INSERT OR REPLACE INTO price_history "
+                "(ticker, date, close, source) VALUES (?, ?, ?, 'yfinance')",
+                batch,
+            )
+        except sqlite3.Error as e:
+            log.error(f"DB batch insert failed for {len(batch)} rows: {e}")
     conn.commit()
 
     log.info(f"yFinance: got prices for {len(latest_prices)}/{len(yf_symbols)} tickers")

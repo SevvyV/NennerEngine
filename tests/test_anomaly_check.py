@@ -65,6 +65,26 @@ class TestCheckSignalAnomalies(unittest.TestCase):
         signals = [{"ticker": "GC", "cancel_level": 0, "raw_text": "x"}]
         self.assertEqual(check_signal_anomalies(self.conn, signals), [])
 
+    def test_multi_ticker_batch(self):
+        """Multiple tickers in one call should be evaluated in a single
+        round-trip — verify per-ticker boundaries are respected (history
+        for GC must not pollute SI's anomaly detection)."""
+        # GC: stable history at ~2580
+        _seed_signal(self.conn, "GC", "2026-04-20", cancel_level=2580.0)
+        _seed_signal(self.conn, "GC", "2026-04-21", cancel_level=2585.0)
+        # SI: stable history at ~78
+        _seed_signal(self.conn, "SI", "2026-04-20", cancel_level=78.0)
+        _seed_signal(self.conn, "SI", "2026-04-21", cancel_level=78.5)
+
+        signals = [
+            {"ticker": "GC", "cancel_level": 2590.0, "raw_text": "ok"},
+            {"ticker": "SI", "cancel_level": 200.0, "raw_text": "fat-finger"},
+        ]
+        anomalies = check_signal_anomalies(self.conn, signals)
+        # Only SI's 200 is anomalous; GC's 2590 is normal.
+        self.assertEqual(len(anomalies), 1)
+        self.assertEqual(anomalies[0]["ticker"], "SI")
+
     def test_threshold_is_configurable(self):
         # 10% threshold: 2580 → 2870 = 11% deviation, should flag.
         _seed_signal(self.conn, "GC", "2026-04-20", cancel_level=2580.0)

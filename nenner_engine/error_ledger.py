@@ -1,8 +1,9 @@
 """Central Error Ledger — shared error log across FischerDaily, NennerEngine, DataCenter.
 
-Writes ERROR+ records and retry-related WARNINGs to a single shared log file
-at E:\\Workspace\\logs\\error_ledger.log.  Each system attaches this handler
-to its root logger during startup.
+Writes ERROR+ records and retry-related WARNINGs to a single shared log file.
+The directory is sourced from config.LOG_DIR (overridable via the
+NENNER_LOG_DIR environment variable) so tests on other machines don't fail
+trying to create the production ``E:\\Workspace\\logs`` path.
 
 The handler is additive — it does not replace existing log handlers.
 Uses direct file append (not RotatingFileHandler) for multi-process safety.
@@ -16,9 +17,10 @@ import os
 import threading
 from datetime import datetime
 
+from .config import LOG_DIR
 from .tz import ET as _ET
 
-LEDGER_PATH = os.path.join("E:\\Workspace\\logs", "error_ledger.log")
+LEDGER_PATH = os.path.join(LOG_DIR, "error_ledger.log")
 _MAX_BYTES = 5 * 1024 * 1024  # 5 MB
 _BACKUP_COUNT = 10
 

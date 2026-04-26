@@ -7,6 +7,14 @@ from pathlib import Path as _Path
 PROJECT_ROOT = _Path(__file__).resolve().parent.parent
 DEFAULT_DB_PATH = str(_Path(r"E:\Workspace\DataCenter\nenner_signals.db"))
 
+# Central error-ledger directory shared with FischerDaily. Override via
+# NENNER_LOG_DIR for tests / alternate machines so error_ledger does not
+# blindly try to write to a Windows-only hardcoded path.
+LOG_DIR = _os.environ.get(
+    "NENNER_LOG_DIR",
+    str(_Path(r"E:\Workspace\logs")),
+)
+
 
 # ── Environment Loading ─────────────────────────────────────────
 # Single canonical .env loader. Replaces the three near-duplicates that

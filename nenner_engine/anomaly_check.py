@@ -44,21 +44,44 @@ def check_signal_anomalies(
     """
     anomalies: list[dict] = []
 
+    # Collect distinct tickers up-front. The original implementation issued
+    # one SELECT per signal — a Nenner email with N tickers paid N round-
+    # trips. We now run a single window-function query keyed on the ticker
+    # set and group the rows in Python, dropping the N+1 cost to one trip.
+    tickers = {sig["ticker"] for sig in signals if sig.get("ticker")}
+    if not tickers:
+        return anomalies
+
+    placeholders = ",".join("?" * len(tickers))
+    rows = conn.execute(
+        f"""
+        WITH ranked AS (
+            SELECT ticker, origin_price, cancel_level, trigger_level,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY ticker
+                       ORDER BY date DESC, id DESC
+                   ) AS rn
+            FROM signals
+            WHERE ticker IN ({placeholders})
+        )
+        SELECT ticker, origin_price, cancel_level, trigger_level
+        FROM ranked
+        WHERE rn <= ?
+        ORDER BY ticker, rn
+        """,
+        (*tickers, _MIN_HISTORY + 1),
+    ).fetchall()
+
+    history_by_ticker: dict[str, list] = {}
+    for r in rows:
+        history_by_ticker.setdefault(r["ticker"], []).append(r)
+
     for sig in signals:
         ticker = sig.get("ticker")
         if not ticker:
             continue
 
-        # Pull last 3 signals for this ticker (excluding the current batch)
-        cur = conn.cursor()
-        cur.row_factory = sqlite3.Row
-        history = cur.execute(
-            "SELECT origin_price, cancel_level, trigger_level "
-            "FROM signals WHERE ticker = ? "
-            "ORDER BY date DESC, id DESC LIMIT ?",
-            (ticker, _MIN_HISTORY + 1),  # +1 in case one row is sparse
-        ).fetchall()
-
+        history = history_by_ticker.get(ticker, [])
         if len(history) < _MIN_HISTORY:
             continue
 
