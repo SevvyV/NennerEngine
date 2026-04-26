@@ -28,10 +28,15 @@ jobs:
           # not exercised by unit tests) keeps CI fast and Linux-friendly.
           # scipy: test_fischer_engine.py uses scipy.stats.norm.
           # httpx: fastapi's TestClient needs it.
+          # dash + dash-bootstrap-components: test_dashboard_split.py
+          # imports the dashboard package, which pulls dash at module load.
           pip install \
             "anthropic>=0.83.0,<1.0" \
             "fastapi>=0.135.2,<1.0" \
             "httpx" \
+            "dash>=4.0.0,<5.0" \
+            "dash-bootstrap-components>=2.0.4,<3.0" \
+            "Flask>=3.1.3,<4.0" \
             "yfinance>=1.2.0,<2.0" \
             "pandas>=3.0.1,<4.0" \
             "numpy>=2.4.2,<3.0" \
