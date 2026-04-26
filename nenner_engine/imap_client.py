@@ -15,7 +15,7 @@ from pathlib import Path
 
 from .parser import classify_email, extract_text_from_email
 from .llm_parser import parse_email_signals_llm
-from .db import store_email, store_parsed_results
+from .db import store_email, store_parsed_results, compute_current_state
 from .anomaly_check import check_signal_anomalies, alert_anomalies
 
 from .config import NENNER_SENDER, IMAP_SERVER, IMAP_TIMEOUT, load_env_once
@@ -160,9 +160,15 @@ def _email_authenticated(msg, expected_domain: str = "charlesnenner.com") -> boo
 # ---------------------------------------------------------------------------
 
 def process_email(conn, msg, source_id: str = None) -> bool:
-    """
-    Process a single email message: extract text, parse signals, store in DB.
-    Returns True if new email was processed, False if duplicate.
+    """Process a single email message atomically: store the email row,
+    parse signals via LLM, persist signals/cycles/targets, and rebuild
+    current_state — all as one transaction. If anything between the
+    initial store and the final state rebuild fails, the entire
+    transaction rolls back so the email row is removed and the next
+    IMAP poll re-tries the whole pipeline cleanly.
+
+    Returns True if a new email was successfully stored, False if it
+    was a duplicate or got rolled back for any reason.
     """
     subject = msg.get("subject", "No Subject")
     date_str = msg.get("date", "")
@@ -185,82 +191,109 @@ def process_email(conn, msg, source_id: str = None) -> bool:
         log.warning(f"Skipping empty email: {subject}")
         return False
 
-    # Store email
-    email_id = store_email(conn, message_id, subject, email_date, email_type, body)
-    if email_id is None:
-        return False  # Duplicate
-
-    # Parse signals via LLM
-    results = parse_email_signals_llm(body, email_date, email_id)
-
-    # Sanity check 0: a signal-bearing email type returning zero signals is
-    # almost always an LLM parse failure (transient API error, truncated
-    # response that salvaged to empty, etc.). Retry once. If the retry is
-    # still empty, roll back the email row so the next IMAP poll re-tries
-    # the whole thing instead of being blocked by the message_id dedupe.
-    if (email_type in _SIGNAL_BEARING_TYPES
-            and len(results.get("signals", [])) == 0):
-        log.warning(
-            f"{email_type} email returned 0 signals — retrying LLM parse "
-            f"(email_id={email_id})"
+    # Open the atomic transaction. Any return path that does not reach the
+    # final conn.commit() rolls back via the except clause, taking the
+    # email row with it so message_id dedup will not block a retry.
+    if conn.in_transaction:
+        log.error("process_email called inside an existing transaction — refusing")
+        return False
+    conn.execute("BEGIN")
+    rolled_back = False
+    try:
+        email_id = store_email(
+            conn, message_id, subject, email_date, email_type, body,
+            commit=False,
         )
-        results = parse_email_signals_llm(body, email_date, email_id)
-        if len(results.get("signals", [])) == 0:
-            log.error(
-                f"Retry still returned 0 signals for email {email_id}: {subject[:60]} "
-                f"— rolling back so next poll can re-try"
-            )
-            conn.execute("DELETE FROM emails WHERE id = ?", (email_id,))
+        if email_id is None:
             conn.commit()
-            try:
-                from nenner_engine.alert_dispatch import get_telegram_config, send_telegram
-                token, chat_id = get_telegram_config()
-                if token and chat_id:
-                    send_telegram(
-                        f"⚠️ NennerEngine: {email_type} parsed 0 signals "
-                        f"after retry. Email not marked read; next IMAP poll will "
-                        f"re-try.\nEmail: {subject[:80]}",
-                        token, chat_id,
-                    )
-            except Exception:
-                pass
-            return False  # caller must NOT mark \Seen
+            return False  # Duplicate — nothing to roll back
 
-    # Sanity check: Stocks Cycle Charts emails should always have cycles.
-    # If signals were parsed but cycles are empty, the LLM likely returned
-    # a partial response — retry once.
-    if (email_type == "stocks_update"
-            and len(results.get("signals", [])) > 0
-            and len(results.get("cycles", [])) == 0):
-        log.warning(
-            f"Stocks Cycle Charts email returned signals but 0 cycles — retrying LLM parse"
-        )
+        # Parse signals via LLM
         results = parse_email_signals_llm(body, email_date, email_id)
-        if len(results.get("cycles", [])) == 0:
-            log.error(
-                f"Retry still returned 0 cycles for email {email_id}: {subject[:60]}"
+
+        # Sanity check: a signal-bearing email type returning zero signals
+        # is almost always an LLM parse failure. Retry once. If still empty,
+        # roll back so message_id dedup does not block the next IMAP poll.
+        if (email_type in _SIGNAL_BEARING_TYPES
+                and len(results.get("signals", [])) == 0):
+            log.warning(
+                f"{email_type} email returned 0 signals — retrying LLM parse "
+                f"(email_id={email_id})"
             )
+            results = parse_email_signals_llm(body, email_date, email_id)
+            if len(results.get("signals", [])) == 0:
+                log.error(
+                    f"Retry still returned 0 signals for email {email_id}: "
+                    f"{subject[:60]} — rolling back so next poll can re-try"
+                )
+                conn.rollback()
+                rolled_back = True
+                try:
+                    from nenner_engine.alert_dispatch import get_telegram_config, send_telegram
+                    token, chat_id = get_telegram_config()
+                    if token and chat_id:
+                        send_telegram(
+                            f"⚠️ NennerEngine: {email_type} parsed 0 signals "
+                            f"after retry. Email not marked read; next IMAP poll "
+                            f"will re-try.\nEmail: {subject[:80]}",
+                            token, chat_id,
+                        )
+                except Exception:
+                    pass
+                return False  # caller must NOT mark \Seen
+
+        # Sanity check: Stocks Cycle Charts emails should always have cycles.
+        # If signals are present but cycles are missing, retry once. (No
+        # rollback: signals are still useful even without cycles.)
+        if (email_type == "stocks_update"
+                and len(results.get("signals", [])) > 0
+                and len(results.get("cycles", [])) == 0):
+            log.warning(
+                "Stocks Cycle Charts email returned signals but 0 cycles — "
+                "retrying LLM parse"
+            )
+            results = parse_email_signals_llm(body, email_date, email_id)
+            if len(results.get("cycles", [])) == 0:
+                log.error(
+                    f"Retry still returned 0 cycles for email {email_id}: "
+                    f"{subject[:60]}"
+                )
+                try:
+                    from nenner_engine.alert_dispatch import get_telegram_config, send_telegram
+                    token, chat_id = get_telegram_config()
+                    if token and chat_id:
+                        send_telegram(
+                            f"⚠️ NennerEngine: Stocks Cycle Charts parsed "
+                            f"{len(results['signals'])} signals but 0 cycles. "
+                            f"Cycle data is missing — stock report will use stale data.\n"
+                            f"Email: {subject[:80]}",
+                            token, chat_id,
+                        )
+                except Exception:
+                    pass
+
+        # Anomaly check is read-only (queries history) so safe inside tx.
+        anomalies = check_signal_anomalies(conn, results.get("signals", []))
+        if anomalies:
+            alert_anomalies(anomalies)
+
+        # Store signals/cycles/targets and rebuild current_state, all
+        # under our open transaction. compute_current_state notices it is
+        # already inside a transaction and skips its own with-block.
+        store_parsed_results(
+            conn, results, email_id,
+            commit=False, rebuild_state=False,
+        )
+        compute_current_state(conn)
+
+        conn.commit()
+    except Exception:
+        if not rolled_back:
             try:
-                from nenner_engine.alert_dispatch import get_telegram_config, send_telegram
-                token, chat_id = get_telegram_config()
-                if token and chat_id:
-                    send_telegram(
-                        f"\u26a0\ufe0f NennerEngine: Stocks Cycle Charts parsed "
-                        f"{len(results['signals'])} signals but 0 cycles. "
-                        f"Cycle data is missing — stock report will use stale data.\n"
-                        f"Email: {subject[:80]}",
-                        token, chat_id,
-                    )
+                conn.rollback()
             except Exception:
                 pass
-
-    # Check for anomalous values (potential typos) before storing
-    anomalies = check_signal_anomalies(conn, results.get("signals", []))
-    if anomalies:
-        alert_anomalies(anomalies)
-
-    # Store results
-    store_parsed_results(conn, results, email_id)
+        raise
 
     sig_count = len(results["signals"])
     cyc_count = len(results["cycles"])

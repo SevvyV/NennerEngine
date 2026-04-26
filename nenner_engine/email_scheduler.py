@@ -241,7 +241,9 @@ def run_email_check(db_path: str,
     result = {
         "new_emails": 0,
         "error": None,
-        "timestamp": datetime.now().isoformat(),
+        # Tz-aware ET timestamp so the interval-skip logic in _run() can
+        # compare against a tz-aware now without DST or system-clock drift.
+        "timestamp": _now_eastern().isoformat(),
         "trade_changes": [],
     }
 
@@ -537,15 +539,34 @@ class EmailScheduler:
                         effective_interval = self.interval_minutes
                     in_window = win_start <= now_et.hour < win_end
                     if in_window:
-                        now = datetime.now()
+                        # Use the tz-aware ET clock for all interval timing.
+                        # datetime.now() returns a naive local-system time,
+                        # which silently jumps an hour at every DST boundary
+                        # and skips/repeats checks. now_et() is anchored in
+                        # America/New_York and is monotonic across DST.
+                        now = now_et
                         if (self._last_interval_check is None
                                 or now - self._last_interval_check
                                 >= timedelta(minutes=effective_interval)):
                             self._last_interval_check = now
-                            # Skip if we just did a startup or daily check
+                            # Skip if we just did a startup or daily check.
+                            # Defensive: if last["timestamp"] was written by
+                            # older naive-clock code, the subtraction would
+                            # raise TypeError (aware - naive). Treat that as
+                            # "no recent check" rather than crashing the loop.
                             last = self.last_result
-                            if last and (datetime.now() - datetime.fromisoformat(last["timestamp"])
-                                         < timedelta(minutes=2)):
+                            recent = False
+                            if last:
+                                try:
+                                    last_ts = datetime.fromisoformat(last["timestamp"])
+                                    if last_ts.tzinfo is None:
+                                        # Old naive timestamp — re-anchor to ET
+                                        # for a sane comparison this once.
+                                        last_ts = last_ts.replace(tzinfo=now.tzinfo)
+                                    recent = (now - last_ts) < timedelta(minutes=2)
+                                except (TypeError, ValueError):
+                                    recent = False
+                            if recent:
                                 pass  # too recent, skip
                             else:
                                 self._do_check(

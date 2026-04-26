@@ -544,71 +544,90 @@ def compute_current_state(conn: sqlite3.Connection):
     # would leave the implicit transaction open with the DELETE pending —
     # a subsequent commit on the same connection from another code path
     # would commit the DELETE alone and silently empty current_state.
-    with conn:
-        conn.execute("DELETE FROM current_state")
+    #
+    # If the caller is already inside a transaction (e.g. process_email
+    # wrapping the full email→signals→state pipeline), defer to that
+    # outer transaction instead of starting our own — nesting `with conn:`
+    # would commit early and break the outer atomicity guarantee.
+    if conn.in_transaction:
+        _rebuild_current_state_inner(conn, rows, latest_prices)
+    else:
+        with conn:
+            _rebuild_current_state_inner(conn, rows, latest_prices)
 
-        for row in rows:
-            ticker = row["ticker"]
-            signal_type = row["signal_type"]
-            signal_status = row["signal_status"]
+    log.info(f"Current state rebuilt: {len(rows)} instruments")
 
-            if signal_status == "ACTIVE":
-                # Check if the cancel level is already breached by latest close
-                cancel_dir = row["cancel_direction"]
-                cancel_level = row["cancel_level"]
-                last_close = latest_prices.get(ticker)
-                already_breached = is_cancel_breached(cancel_dir, cancel_level, last_close)
 
-                if already_breached:
-                    # Signal is ACTIVE per Nenner text but cancel is already
-                    # breached — flip to implied reversal so the watchlist
-                    # reflects reality instead of waiting for auto-cancel.
-                    log.info(
-                        f"State rebuild: {ticker} {signal_type} cancel "
-                        f"{cancel_dir} {cancel_level} already breached "
-                        f"(close={last_close:.2f}) — marking implied reversal"
-                    )
-                    signal_status = "CANCELLED"
-                else:
-                    conn.execute("""
-                        INSERT OR REPLACE INTO current_state
-                        (ticker, instrument, asset_class, effective_signal, effective_status,
-                         origin_price, cancel_direction, cancel_level,
-                         trigger_direction, trigger_level,
-                         implied_reversal, source_signal_id, last_updated, last_signal_date)
-                        VALUES (?, ?, ?, ?, 'ACTIVE', ?, ?, ?, ?, ?, 0, ?, datetime('now'), ?)
-                    """, (ticker, row["instrument"], row["asset_class"],
-                          signal_type, row["origin_price"],
-                          row["cancel_direction"], row["cancel_level"],
-                          row["trigger_direction"], row["trigger_level"],
-                          row["id"], row["date"]))
+def _rebuild_current_state_inner(conn, rows, latest_prices):
+    """Body of compute_current_state — does not manage transactions.
 
-            if signal_status == "CANCELLED":
-                # Cancellation implies reversal
-                if signal_type == "BUY":
-                    implied_signal = "SELL"
-                elif signal_type == "SELL":
-                    implied_signal = "BUY"
-                else:
-                    implied_signal = "NEUTRAL"
+    Public callers should use compute_current_state, which handles the
+    transaction wrapping. This inner form exists so a caller already in
+    a transaction (process_email) can include the rebuild in its own
+    atomic unit without the nested-commit problem.
+    """
+    conn.execute("DELETE FROM current_state")
 
-                implied_origin = row["cancel_level"]
-                implied_cancel_dir = row["trigger_direction"]
-                implied_cancel_lvl = row["trigger_level"]
+    for row in rows:
+        ticker = row["ticker"]
+        signal_type = row["signal_type"]
+        signal_status = row["signal_status"]
 
+        if signal_status == "ACTIVE":
+            # Check if the cancel level is already breached by latest close
+            cancel_dir = row["cancel_direction"]
+            cancel_level = row["cancel_level"]
+            last_close = latest_prices.get(ticker)
+            already_breached = is_cancel_breached(cancel_dir, cancel_level, last_close)
+
+            if already_breached:
+                # Signal is ACTIVE per Nenner text but cancel is already
+                # breached — flip to implied reversal so the watchlist
+                # reflects reality instead of waiting for auto-cancel.
+                log.info(
+                    f"State rebuild: {ticker} {signal_type} cancel "
+                    f"{cancel_dir} {cancel_level} already breached "
+                    f"(close={last_close:.2f}) — marking implied reversal"
+                )
+                signal_status = "CANCELLED"
+            else:
                 conn.execute("""
                     INSERT OR REPLACE INTO current_state
                     (ticker, instrument, asset_class, effective_signal, effective_status,
                      origin_price, cancel_direction, cancel_level,
                      trigger_direction, trigger_level,
                      implied_reversal, source_signal_id, last_updated, last_signal_date)
-                    VALUES (?, ?, ?, ?, 'ACTIVE', ?, ?, ?, NULL, NULL, 1, ?, datetime('now'), ?)
+                    VALUES (?, ?, ?, ?, 'ACTIVE', ?, ?, ?, ?, ?, 0, ?, datetime('now'), ?)
                 """, (ticker, row["instrument"], row["asset_class"],
-                      implied_signal, implied_origin,
-                      implied_cancel_dir, implied_cancel_lvl,
+                      signal_type, row["origin_price"],
+                      row["cancel_direction"], row["cancel_level"],
+                      row["trigger_direction"], row["trigger_level"],
                       row["id"], row["date"]))
 
-    log.info(f"Current state rebuilt: {len(rows)} instruments")
+        if signal_status == "CANCELLED":
+            # Cancellation implies reversal
+            if signal_type == "BUY":
+                implied_signal = "SELL"
+            elif signal_type == "SELL":
+                implied_signal = "BUY"
+            else:
+                implied_signal = "NEUTRAL"
+
+            implied_origin = row["cancel_level"]
+            implied_cancel_dir = row["trigger_direction"]
+            implied_cancel_lvl = row["trigger_level"]
+
+            conn.execute("""
+                INSERT OR REPLACE INTO current_state
+                (ticker, instrument, asset_class, effective_signal, effective_status,
+                 origin_price, cancel_direction, cancel_level,
+                 trigger_direction, trigger_level,
+                 implied_reversal, source_signal_id, last_updated, last_signal_date)
+                VALUES (?, ?, ?, ?, 'ACTIVE', ?, ?, ?, NULL, NULL, 1, ?, datetime('now'), ?)
+            """, (ticker, row["instrument"], row["asset_class"],
+                  implied_signal, implied_origin,
+                  implied_cancel_dir, implied_cancel_lvl,
+                  row["id"], row["date"]))
 
 
 # ---------------------------------------------------------------------------
@@ -616,23 +635,36 @@ def compute_current_state(conn: sqlite3.Connection):
 # ---------------------------------------------------------------------------
 
 def store_email(conn: sqlite3.Connection, message_id: str, subject: str,
-                date_sent: str, email_type: str, raw_text: str) -> Optional[int]:
-    """Store email metadata. Returns email_id or None if duplicate."""
+                date_sent: str, email_type: str, raw_text: str,
+                *, commit: bool = True) -> Optional[int]:
+    """Store email metadata. Returns email_id or None if duplicate.
+
+    Pass ``commit=False`` when the caller is managing a wrapping
+    transaction (e.g. process_email atomicity). The IntegrityError path
+    on a duplicate message_id raises before any commit either way.
+    """
     try:
         cur = conn.execute(
             "INSERT INTO emails (message_id, subject, date_sent, date_parsed, email_type, raw_text) "
             "VALUES (?, ?, ?, ?, ?, ?)",
             (message_id, subject, date_sent, datetime.now().isoformat(), email_type, raw_text)
         )
-        conn.commit()
+        if commit:
+            conn.commit()
         return cur.lastrowid
     except sqlite3.IntegrityError:
         # Duplicate message_id
         return None
 
 
-def store_parsed_results(conn: sqlite3.Connection, results: dict, email_id: int):
-    """Store parsed signals, cycles, and price targets."""
+def store_parsed_results(conn: sqlite3.Connection, results: dict, email_id: int,
+                         *, commit: bool = True, rebuild_state: bool = True):
+    """Store parsed signals, cycles, and price targets.
+
+    ``commit=False`` and ``rebuild_state=False`` let a caller compose this
+    write into a wider transaction (process_email rolls back the whole
+    email→signals→state pipeline if any step fails).
+    """
     for sig in results["signals"]:
         conn.execute(
             "INSERT INTO signals (email_id, date, instrument, ticker, asset_class, "
@@ -669,7 +701,9 @@ def store_parsed_results(conn: sqlite3.Connection, results: dict, email_id: int)
     # Update signal count
     total = len(results["signals"]) + len(results["cycles"]) + len(results["price_targets"])
     conn.execute("UPDATE emails SET signal_count = ? WHERE id = ?", (total, email_id))
-    conn.commit()
+    if commit:
+        conn.commit()
 
-    # Rebuild current state after every email
-    compute_current_state(conn)
+    if rebuild_state:
+        # Rebuild current state after every email
+        compute_current_state(conn)
