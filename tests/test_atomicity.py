@@ -247,5 +247,73 @@ class TestAutoCancelAtomicity(unittest.TestCase):
         self.assertFalse(self.conn.in_transaction)
 
 
+class TestSchedulerBriefDedup(unittest.TestCase):
+    """Regression test for the scheduler-level brief dedup query.
+
+    email_scheduler.run_email_check has its own pre-check that skips
+    invoking generate_morning_brief if a brief already exists for the
+    new email. Phase 1b added a sent_at column so a brief that was
+    stored but failed to send can be retried — the pre-check MUST
+    honor sent_at, otherwise it skips the retry that stanley.py would
+    have performed correctly.
+
+    This test pins the SQL: a row with sent_at NULL must NOT cause
+    the dedup to fire.
+    """
+
+    def setUp(self):
+        self.conn = make_test_db()
+
+    def tearDown(self):
+        self.conn.close()
+
+    def _seed_email_and_brief(self, *, sent: bool) -> int:
+        cur = self.conn.execute(
+            "INSERT INTO emails (message_id, subject, date_sent, date_parsed, "
+            "email_type, raw_text) "
+            "VALUES (?, ?, ?, datetime('now'), 'morning_update', 'b')",
+            ("m1", "subj", "2026-04-26"),
+        )
+        email_id = cur.lastrowid
+        self.conn.execute(
+            "INSERT INTO stanley_briefs (email_id, brief_text, sent_at) "
+            "VALUES (?, ?, ?)",
+            (email_id, "brief text",
+             "2026-04-26T08:30:00" if sent else None),
+        )
+        self.conn.commit()
+        return email_id
+
+    def _scheduler_dedup_query(self, email_id: int) -> bool:
+        """Replicate the SQL the scheduler runs at email_scheduler.py:293."""
+        row = self.conn.execute(
+            "SELECT 1 FROM stanley_briefs "
+            "WHERE email_id = ? AND sent_at IS NOT NULL LIMIT 1",
+            (email_id,),
+        ).fetchone()
+        return row is not None
+
+    def test_sent_brief_is_deduped(self):
+        """Already-sent brief: pre-check must short-circuit."""
+        email_id = self._seed_email_and_brief(sent=True)
+        self.assertTrue(self._scheduler_dedup_query(email_id))
+
+    def test_unsent_brief_is_NOT_deduped(self):
+        """Stored-but-unsent brief: pre-check must allow generate_morning_brief
+        to run so it can reuse the stored text and retry the email step."""
+        email_id = self._seed_email_and_brief(sent=False)
+        self.assertFalse(self._scheduler_dedup_query(email_id))
+
+    def test_no_brief_at_all_is_NOT_deduped(self):
+        """Fresh email: no row exists, pre-check must allow brief generation."""
+        cur = self.conn.execute(
+            "INSERT INTO emails (message_id, subject, date_sent, date_parsed, "
+            "email_type, raw_text) VALUES ('fresh', 's', '2026-04-26', "
+            "datetime('now'), 'morning_update', 'b')",
+        )
+        self.conn.commit()
+        self.assertFalse(self._scheduler_dedup_query(cur.lastrowid))
+
+
 if __name__ == "__main__":
     unittest.main()

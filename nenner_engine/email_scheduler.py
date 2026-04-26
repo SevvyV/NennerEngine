@@ -285,12 +285,17 @@ def run_email_check(db_path: str,
                     email_id = latest_email["id"]
                     raw_text = latest_email["raw_text"]
 
-                    # Skip if we already sent a brief for this email
-                    # Check both in-memory tracker AND database for cross-restart dedup
+                    # Skip if we already SENT a brief for this email. Checking
+                    # only "row exists" here would defeat the retry path that
+                    # Phase 1b adds — a stored-but-unsent brief (sent_at NULL)
+                    # must fall through so generate_morning_brief can reuse the
+                    # text and retry the email step. The sent_at filter keeps
+                    # this pre-check consistent with stanley.py's own dedup.
                     already_sent = email_id == skip_brief_for_email_id
                     if not already_sent:
                         existing = conn.execute(
-                            "SELECT 1 FROM stanley_briefs WHERE email_id = ? LIMIT 1",
+                            "SELECT 1 FROM stanley_briefs "
+                            "WHERE email_id = ? AND sent_at IS NOT NULL LIMIT 1",
                             (email_id,),
                         ).fetchone()
                         already_sent = existing is not None
