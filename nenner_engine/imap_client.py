@@ -18,7 +18,7 @@ from .llm_parser import parse_email_signals_llm
 from .db import store_email, store_parsed_results
 from .anomaly_check import check_signal_anomalies, alert_anomalies
 
-from .config import NENNER_SENDER, IMAP_SERVER, load_env_once
+from .config import NENNER_SENDER, IMAP_SERVER, IMAP_TIMEOUT, load_env_once
 
 log = logging.getLogger(__name__)
 
@@ -75,9 +75,10 @@ def get_credentials() -> tuple[str, str]:
 # ---------------------------------------------------------------------------
 
 def connect_imap(gmail_addr: str, gmail_pass: str) -> imaplib.IMAP4_SSL:
-    """Connect to Gmail IMAP."""
+    """Connect to Gmail IMAP with a socket timeout so the scheduler thread
+    can't be hung forever by a stalled handshake or login."""
     log.info(f"Connecting to {IMAP_SERVER}...")
-    imap = imaplib.IMAP4_SSL(IMAP_SERVER)
+    imap = imaplib.IMAP4_SSL(IMAP_SERVER, timeout=IMAP_TIMEOUT)
     imap.login(gmail_addr, gmail_pass)
     log.info(f"Authenticated as {gmail_addr}")
     return imap

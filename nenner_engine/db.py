@@ -14,7 +14,7 @@ log = logging.getLogger(__name__)
 # Bump this when a migration is appended to the list in migrate_db().
 # Used to short-circuit the per-connection migration dance that was
 # previously paying a ~15-statement cost on every scheduler tick.
-CURRENT_SCHEMA_VERSION = 16
+CURRENT_SCHEMA_VERSION = 17
 
 
 # ---------------------------------------------------------------------------
@@ -353,6 +353,12 @@ def migrate_db(conn: sqlite3.Connection):
         # identify/regenerate on bad-data correction.
         "ALTER TABLE signals ADD COLUMN source TEXT NOT NULL DEFAULT 'nenner'",
         "CREATE INDEX IF NOT EXISTS idx_signals_source_ticker_date ON signals(source, ticker, date)",
+        # v17: Track actual email-send confirmation for Stanley briefs so a
+        # store-success / send-failure leaves the brief un-dedup'd on the
+        # next attempt. Existing rows are backfilled to created_at — they
+        # were sent (or believed sent) before this column existed.
+        "ALTER TABLE stanley_briefs ADD COLUMN sent_at TEXT",
+        "UPDATE stanley_briefs SET sent_at = created_at WHERE sent_at IS NULL",
     ]
     for sql in migrations:
         try:

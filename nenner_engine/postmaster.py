@@ -26,6 +26,7 @@ import logging
 import os
 import re
 import smtplib
+import time
 from datetime import datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -184,16 +185,36 @@ def send_email(subject: str, html_body: str,
     msg.attach(text_part)
     msg.attach(html_part)
 
-    try:
-        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT, timeout=SMTP_TIMEOUT) as server:
-            server.starttls()
-            server.login(gmail_addr, gmail_pass)
-            server.send_message(msg)
-        log.info(f"Email sent to {to_addr}: {subject}")
-        return True
-    except Exception as e:
-        log.error(f"Email send failed: {e}")
-        return False
+    # First attempt at full timeout; if SMTP is briefly unreachable, retry
+    # once on a tighter budget after a short delay. Two attempts is the
+    # right ceiling — beyond that we surface the failure to the caller
+    # (Stanley dedup, stock report logging) rather than mask it with a
+    # long retry loop. Auth-shaped errors (5xx login failures) are
+    # short-circuited so a wrong password doesn't trip Gmail's failed-auth
+    # rate limit by retrying.
+    last_err: Exception | None = None
+    for attempt, timeout in enumerate((SMTP_TIMEOUT, max(5, SMTP_TIMEOUT // 6)), 1):
+        try:
+            with smtplib.SMTP(SMTP_SERVER, SMTP_PORT, timeout=timeout) as server:
+                server.starttls()
+                server.login(gmail_addr, gmail_pass)
+                server.send_message(msg)
+            log.info(f"Email sent to {to_addr}: {subject}")
+            return True
+        except smtplib.SMTPAuthenticationError as e:
+            # Wrong password / app-password — retrying just hammers Gmail.
+            log.error(f"Email send failed (auth, no retry): {e}")
+            return False
+        except Exception as e:
+            last_err = e
+            if attempt == 1:
+                log.warning(
+                    f"Email send attempt {attempt} failed ({type(e).__name__}: {e}); "
+                    "retrying after 1s"
+                )
+                time.sleep(1.0)
+    log.error(f"Email send failed after retries: {last_err}")
+    return False
 
 
 # ---------------------------------------------------------------------------

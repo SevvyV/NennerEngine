@@ -95,9 +95,11 @@ def generate_and_send_stock_report(
     html = build_stock_report_html(stocks_data, stanley_take)
     subject = build_report_subject(stocks_data)
 
-    # 4. Send email
+    # 4. Send email — check return value so a silent SMTP failure surfaces
     if send_email_flag:
-        send_email(subject, html)
+        ok = send_email(subject, html)
+        if not ok:
+            log.error("Stock report send_email returned False — email NOT delivered")
 
     log.info(f"Stock report generated: {len(html)} chars, "
              f"{len(stocks_data)} stocks, LLM={'yes' if stanley_take else 'no'}")

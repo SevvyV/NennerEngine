@@ -59,6 +59,14 @@ IMAP_SERVER = "imap.gmail.com"
 SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT = 587
 SMTP_TIMEOUT = 30
+# Total socket budget for Gmail IMAP — covers connect + login + per-cmd I/O.
+# Without this, imaplib can block forever on a network stall and freeze
+# the entire scheduler thread.
+IMAP_TIMEOUT = 30
+# Hard cap on yfinance batch downloads. yfinance uses requests under the
+# hood and can stall when Yahoo's CDN times out; we wrap the call in a
+# thread with this budget so a slow fetch never freezes the scheduler.
+YFINANCE_TIMEOUT = 30
 NENNER_SENDER = "newsletter@charlesnenner.com"
 
 # ── LLM ─────────────────────────────────────────────────────────

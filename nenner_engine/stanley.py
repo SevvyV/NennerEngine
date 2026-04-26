@@ -10,6 +10,8 @@ Named after Stanley Druckenmiller.
 
 import json
 import logging
+import math
+import random
 import re
 import sqlite3
 import time
@@ -170,12 +172,18 @@ def _gather_market_snapshot(conn: sqlite3.Connection) -> dict:
 
     Returns dict with 'movers' (|change| >= 3%), 'all' rows, and 'as_of' date.
     """
-    # Current prices (latest per ticker, prefer T1)
+    # Current prices (latest per ticker, prefer T1).
+    # Exclude weekend dates — DataBento can write garbage indicative prices
+    # on Sat/Sun that poison daily-change calculations.
     current = {}
     rows = conn.execute(
         "SELECT ticker, close, date, source FROM price_history p "
-        "INNER JOIN (SELECT ticker AS t, MAX(date) AS d FROM price_history GROUP BY ticker) m "
-        "ON p.ticker = m.t AND p.date = m.d "
+        "INNER JOIN ("
+        "  SELECT ticker AS t, MAX(date) AS d FROM price_history "
+        "  WHERE CASE CAST(strftime('%w', date) AS INTEGER) "
+        "    WHEN 0 THEN 0 WHEN 6 THEN 0 ELSE 1 END = 1 "
+        "  GROUP BY ticker"
+        ") m ON p.ticker = m.t AND p.date = m.d "
         "ORDER BY p.ticker, CASE WHEN p.source = 'T1' THEN 0 ELSE 1 END"
     ).fetchall()
     for r in rows:
@@ -217,14 +225,20 @@ def _gather_market_snapshot(conn: sqlite3.Connection) -> dict:
     all_rows = []
     for ticker, info in current.items():
         price = info["price"]
-        if not price:
+        if not price or not math.isfinite(price):
             continue
         prior_close = prior.get(ticker)
-        change_pct = ((price - prior_close) / prior_close * 100) if prior_close else None
+        if prior_close and math.isfinite(prior_close) and prior_close > 0:
+            change_pct = (price - prior_close) / prior_close * 100
+        else:
+            change_pct = None
 
         sig = signals.get(ticker, {})
         cancel = sig.get("cancel")
-        cancel_dist = ((cancel - price) / price * 100) if (cancel and price) else None
+        if cancel and math.isfinite(cancel) and price > 0:
+            cancel_dist = (cancel - price) / price * 100
+        else:
+            cancel_dist = None
 
         all_rows.append({
             "ticker": ticker,
@@ -546,9 +560,11 @@ def _call_stanley_llm(system_prompt: str,
         except Exception as e:
             last_error = e
             if attempt < LLM_RETRY_ATTEMPTS:
-                wait = 2 ** (attempt + 1)
+                # Add jitter so concurrent retries don't lockstep.
+                base = 2 ** (attempt + 1)
+                wait = base + random.uniform(0, base / 2)
                 log.warning(f"Stanley LLM error (attempt {attempt + 1}), "
-                            f"retrying in {wait}s: {e}")
+                            f"retrying in {wait:.1f}s: {e}")
                 time.sleep(wait)
             else:
                 log.error(f"Stanley LLM failed after {LLM_RETRY_ATTEMPTS + 1} "
@@ -581,72 +597,111 @@ def generate_morning_brief(
         log.error(f"Stanley cannot generate brief: {e}")
         return ""
 
-    # 0. DB-level dedup: skip if we already generated a brief for this email
+    # 0. DB-level dedup. Three states for a given email_id:
+    #   - row exists, sent_at set     → already delivered, skip entirely
+    #   - row exists, sent_at NULL    → previous send failed; REUSE the stored
+    #                                   brief text and retry the email step
+    #                                   (cheaper than another LLM call, and
+    #                                   side-steps the UNIQUE(email_id) index
+    #                                   that would block a fresh INSERT)
+    #   - no row                      → fresh generation
+    brief: str = ""
+    brief_id: Optional[int] = None
     if email_id is not None:
         existing = conn.execute(
-            "SELECT 1 FROM stanley_briefs WHERE email_id = ? LIMIT 1",
+            "SELECT id, brief_text, sent_at FROM stanley_briefs "
+            "WHERE email_id = ? LIMIT 1",
             (email_id,),
         ).fetchone()
         if existing:
-            log.info(f"Stanley dedup: brief already exists for email_id={email_id}, skipping")
+            existing_id = existing["id"] if hasattr(existing, "keys") else existing[0]
+            existing_text = existing["brief_text"] if hasattr(existing, "keys") else existing[1]
+            existing_sent = existing["sent_at"] if hasattr(existing, "keys") else existing[2]
+            if existing_sent:
+                log.info(f"Stanley dedup: brief already sent for email_id={email_id}, skipping")
+                return ""
+            log.info(
+                f"Stanley dedup: prior brief for email_id={email_id} not yet sent — "
+                "reusing stored text and retrying delivery"
+            )
+            brief = existing_text or ""
+            brief_id = existing_id
+
+    if not brief:
+        # 1. Determine which tickers need detailed context
+        mentioned_tickers = _extract_mentioned_tickers(changes, parsed_signals)
+
+        # 2. Gather all context
+        current_state = _gather_current_state(conn)
+        trade_stats = _gather_trade_stats(conn, mentioned_tickers)
+        recent_signals = _gather_recent_signals(conn, mentioned_tickers)
+        cycles = _gather_cycles(conn, mentioned_tickers)
+        knowledge = get_knowledge_base(conn)
+        market_snapshot = _gather_market_snapshot(conn)
+
+        # 3. Build system prompt
+        system_prompt = _build_stanley_system_prompt(
+            knowledge, current_state, trade_stats, recent_signals, cycles,
+            market_snapshot=market_snapshot,
+            mentioned_tickers=mentioned_tickers,
+        )
+
+        # 4. Build user message
+        changes_text = json.dumps(changes, indent=2, default=str) if changes else "None detected"
+        user_message = (
+            f"Here is today's Nenner research email:\n\n"
+            f"{raw_email_text}\n\n"
+            f"---\n\n"
+            f"Direction changes detected by the engine:\n"
+            f"{changes_text}\n\n"
+            f"Please generate the morning brief."
+        )
+
+        # 5. Call LLM
+        brief = _call_stanley_llm(system_prompt, user_message, api_key)
+
+        # 6. Store brief
+        try:
+            brief_id = store_brief(conn, brief, email_id)
+        except Exception as e:
+            log.error(f"Failed to store Stanley brief: {e}")
+            brief_id = None
+
+        if brief_id is None:
             return ""
 
-    # 1. Determine which tickers need detailed context
-    mentioned_tickers = _extract_mentioned_tickers(changes, parsed_signals)
-
-    # 2. Gather all context
-    current_state = _gather_current_state(conn)
-    trade_stats = _gather_trade_stats(conn, mentioned_tickers)
-    recent_signals = _gather_recent_signals(conn, mentioned_tickers)
-    cycles = _gather_cycles(conn, mentioned_tickers)
-    knowledge = get_knowledge_base(conn)
-    market_snapshot = _gather_market_snapshot(conn)
-
-    # 3. Build system prompt
-    system_prompt = _build_stanley_system_prompt(
-        knowledge, current_state, trade_stats, recent_signals, cycles,
-        market_snapshot=market_snapshot,
-        mentioned_tickers=mentioned_tickers,
-    )
-
-    # 4. Build user message
-    changes_text = json.dumps(changes, indent=2, default=str) if changes else "None detected"
-    user_message = (
-        f"Here is today's Nenner research email:\n\n"
-        f"{raw_email_text}\n\n"
-        f"---\n\n"
-        f"Direction changes detected by the engine:\n"
-        f"{changes_text}\n\n"
-        f"Please generate the morning brief."
-    )
-
-    # 5. Call LLM
-    brief = _call_stanley_llm(system_prompt, user_message, api_key)
-
-    # 6. Store brief (returns None if duplicate — skip sending)
-    try:
-        brief_id = store_brief(conn, brief, email_id)
-    except Exception as e:
-        log.error(f"Failed to store Stanley brief: {e}")
-        brief_id = None
-
-    if brief_id is None:
-        return ""
-
-    # 7. Send via email
+    # 7. Send via email — only mark sent_at if delivery actually succeeded,
+    # so a store-success / send-failure can be retried on the next attempt.
+    sent_ok = False
     try:
         from .postmaster import markdown_to_html, send_email as _send_email
         email_brief = _strip_html_to_markdown(brief)
         html_brief = markdown_to_html(email_brief)
         today_str = datetime.now().strftime("%b %d, %Y")
-        _send_email(
+        sent_ok = bool(_send_email(
             f"Stanley Morning Brief — {today_str}",
             html_brief,
             to_addr=REPORT_RECIPIENT,
-        )
-        log.info("Stanley brief sent via email")
+        ))
+        if sent_ok:
+            log.info("Stanley brief sent via email")
+        else:
+            log.error(
+                "Stanley brief NOT sent — send_email returned False "
+                "(brief_id=%s will be retried on next run)", brief_id,
+            )
     except Exception as e:
         log.error(f"Stanley email send failed: {e}", exc_info=True)
+
+    if sent_ok and brief_id is not None:
+        try:
+            conn.execute(
+                "UPDATE stanley_briefs SET sent_at = datetime('now') WHERE id = ?",
+                (brief_id,),
+            )
+            conn.commit()
+        except Exception as e:
+            log.error(f"Failed to mark Stanley brief sent_at: {e}")
 
     return brief
 

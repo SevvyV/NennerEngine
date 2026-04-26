@@ -9,6 +9,7 @@ code (db.py, imap_client.py) is unchanged.
 import json
 import logging
 import os
+import random
 import time
 from typing import Optional
 
@@ -332,8 +333,12 @@ def _call_llm(body: str, api_key: str, model: str) -> dict:
         except Exception as e:
             last_error = e
             if attempt < 2:
-                wait = 2 ** (attempt + 1)
-                log.warning(f"LLM API error (attempt {attempt+1}), retrying in {wait}s: {e}")
+                # Exponential backoff with jitter — without it, simultaneous
+                # callers (e.g. dashboard + scheduler) retry in lockstep and
+                # hammer the API right when it's already failing.
+                base = 2 ** (attempt + 1)
+                wait = base + random.uniform(0, base / 2)
+                log.warning(f"LLM API error (attempt {attempt+1}), retrying in {wait:.1f}s: {e}")
                 time.sleep(wait)
             else:
                 log.error(f"LLM API failed after 3 attempts: {e}")

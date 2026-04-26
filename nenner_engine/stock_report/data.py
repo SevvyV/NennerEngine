@@ -5,6 +5,7 @@ plain dicts. No HTML, no LLM, no email — those live in sibling modules.
 """
 
 import logging
+import math
 import sqlite3
 from datetime import datetime, date
 from typing import Optional
@@ -357,9 +358,11 @@ def gather_report_data(conn: sqlite3.Connection) -> list[dict]:
         price_source = price_info.get("source", "")
         price_as_of = price_info.get("as_of", "")
 
-        # P/L
+        # P/L (guard against zero / NaN / Inf in either input)
         pnl_pct = None
-        if origin and price and origin != 0:
+        if (origin and price
+                and math.isfinite(origin) and math.isfinite(price)
+                and origin > 0):
             if signal == "SELL":
                 pnl_pct = (origin - price) / origin * 100
             else:
@@ -367,7 +370,9 @@ def gather_report_data(conn: sqlite3.Connection) -> list[dict]:
 
         # Cancel distance
         cancel_dist_pct = None
-        if cancel and price and price != 0:
+        if (cancel and price
+                and math.isfinite(cancel) and math.isfinite(price)
+                and price > 0):
             cancel_dist_pct = (cancel - price) / price * 100
 
         # Target
@@ -378,7 +383,9 @@ def gather_report_data(conn: sqlite3.Connection) -> list[dict]:
 
         # Target distance
         target_dist_pct = None
-        if target_price and price and price != 0:
+        if (target_price and price
+                and math.isfinite(target_price) and math.isfinite(price)
+                and price > 0):
             target_dist_pct = abs(target_price - price) / price * 100
 
         # R:R

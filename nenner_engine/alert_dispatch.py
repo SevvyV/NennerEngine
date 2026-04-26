@@ -131,6 +131,56 @@ def notify_fischer_refresh(sender_email: str) -> bool:
     return send_telegram(msg, token, chat_id, log_to_ledger=False)
 
 
+def send_critical_alert(subject: str, message: str) -> bool:
+    """Send a high-priority alert with Telegram → email fallback.
+
+    Use for events that MUST reach the operator (auth failures, persistent
+    feed outages, scheduler death). If Telegram succeeds, returns True.
+    If Telegram is unavailable or fails, falls back to email and returns
+    True iff the email is accepted by SMTP.
+
+    Returns False only if BOTH channels fail; the caller is responsible for
+    deciding whether to retry. Either way, the message is written to the
+    error ledger so it is never lost entirely.
+    """
+    from .error_ledger import log_alert as _log_alert
+    _log_alert("CRITICAL", f"{subject}: {message}")
+
+    token, chat_id = get_telegram_config()
+    if token and chat_id:
+        try:
+            tg_text = f"<b>{subject}</b>\n{message}"
+            if send_telegram(tg_text, token, chat_id, log_to_ledger=False):
+                return True
+        except Exception as e:
+            log.error(f"send_critical_alert: telegram path failed: {e}")
+
+    # Email fallback. Be defensive: send_email and the recipient config are
+    # both potential failure points and we MUST NOT raise out of this
+    # function — the caller is in an error-handling path of its own.
+    try:
+        from .postmaster import send_email
+    except Exception as e:
+        log.error(f"send_critical_alert: postmaster import failed: {e}")
+        return False
+    try:
+        from .config import REPORT_RECIPIENT, ADMIN_EMAIL
+        recipient = REPORT_RECIPIENT or ADMIN_EMAIL or None
+    except Exception:
+        recipient = None
+    try:
+        html = (
+            f"<h2 style='color:#c00'>{subject}</h2>"
+            f"<pre style='font-family:monospace;'>{message}</pre>"
+        )
+        return bool(send_email(
+            f"[CRITICAL] {subject}", html, to_addr=recipient,
+        ))
+    except Exception as e:
+        log.error(f"send_critical_alert: email fallback failed: {e}")
+        return False
+
+
 # ---------------------------------------------------------------------------
 # Cooldown & Persistence
 # ---------------------------------------------------------------------------

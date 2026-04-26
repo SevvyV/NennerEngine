@@ -8,6 +8,7 @@ Provides a unified interface for the dashboard and CLI.
 """
 
 import logging
+import math
 import sqlite3
 import threading
 import time
@@ -20,7 +21,39 @@ log = logging.getLogger(__name__)
 _yf_cache: dict[str, float] = {}
 _yf_cache_time: float = 0.0
 _yf_cache_lock = threading.Lock()
-from .config import YF_CACHE_TTL_SECONDS  # noqa: E402
+from .config import YF_CACHE_TTL_SECONDS, YFINANCE_TIMEOUT  # noqa: E402
+
+
+def _yf_download_with_timeout(yf_symbols, period: str, timeout: float = YFINANCE_TIMEOUT):
+    """Run yf.download in a daemon thread bounded by *timeout* seconds.
+
+    yfinance has no native timeout knob and can stall on Yahoo CDN hiccups;
+    a synchronous call would freeze the scheduler thread for minutes. The
+    daemon thread is abandoned on timeout — it will eventually finish
+    whenever Yahoo responds, but won't block our caller.
+    """
+    import yfinance as yf
+    box: dict = {"df": None, "err": None}
+
+    def _run():
+        try:
+            box["df"] = yf.download(
+                yf_symbols, period=period, progress=False, threads=True,
+            )
+        except Exception as e:
+            box["err"] = e
+
+    t = threading.Thread(target=_run, name="yfinance-download", daemon=True)
+    t.start()
+    t.join(timeout=timeout)
+    if t.is_alive():
+        raise TimeoutError(
+            f"yfinance.download exceeded {timeout}s "
+            f"(symbols={len(yf_symbols)}, period={period})"
+        )
+    if box["err"] is not None:
+        raise box["err"]
+    return box["df"]
 
 
 # ---------------------------------------------------------------------------
@@ -215,7 +248,10 @@ def fetch_yfinance_daily(conn: sqlite3.Connection,
     log.info(f"Fetching {len(yf_symbols)} tickers from yFinance (period={period})…")
 
     try:
-        df = yf.download(yf_symbols, period=period, progress=False, threads=True)
+        df = _yf_download_with_timeout(yf_symbols, period=period)
+    except TimeoutError as e:
+        log.error(f"yFinance download timed out: {e}")
+        return {}
     except Exception as e:
         log.error(f"yFinance download failed: {e}")
         return {}
@@ -237,15 +273,21 @@ def fetch_yfinance_daily(conn: sqlite3.Connection,
                 close_series = df["Close"][sym].dropna()
                 if close_series.empty:
                     continue
-                # Store all fetched rows
+                # Store all fetched rows (skip NaN/Inf — yfinance can emit
+                # garbage on data gaps, and we never want infinities in DB).
                 for dt_idx, close_val in close_series.items():
+                    val = float(close_val)
+                    if not math.isfinite(val) or val <= 0:
+                        continue
                     d = dt_idx.strftime("%Y-%m-%d")
                     prices_to_store.setdefault(canonical, []).append({
                         "date": d,
-                        "close": float(close_val),
+                        "close": val,
                     })
                 # Latest close
-                latest_prices[canonical] = float(close_series.iloc[-1])
+                latest = float(close_series.iloc[-1])
+                if math.isfinite(latest) and latest > 0:
+                    latest_prices[canonical] = latest
             except (KeyError, IndexError):
                 log.debug(f"No data for {sym} ({canonical})")
     else:
@@ -256,12 +298,17 @@ def fetch_yfinance_daily(conn: sqlite3.Connection,
             close_series = df["Close"].dropna()
             if not close_series.empty:
                 for dt_idx, close_val in close_series.items():
+                    val = float(close_val)
+                    if not math.isfinite(val) or val <= 0:
+                        continue
                     d = dt_idx.strftime("%Y-%m-%d")
                     prices_to_store.setdefault(canonical, []).append({
                         "date": d,
-                        "close": float(close_val),
+                        "close": val,
                     })
-                latest_prices[canonical] = float(close_series.iloc[-1])
+                latest = float(close_series.iloc[-1])
+                if math.isfinite(latest) and latest > 0:
+                    latest_prices[canonical] = latest
 
     # Persist to DB
     for ticker, rows in prices_to_store.items():
@@ -313,7 +360,7 @@ def _fetch_yf_cached() -> dict[str, float]:
             return _yf_cache
 
         try:
-            import yfinance as yf
+            import yfinance as yf  # noqa: F401 — verified by _yf_download_with_timeout
         except ImportError:
             log.warning("yfinance not installed")
             return _yf_cache or {}
@@ -322,7 +369,10 @@ def _fetch_yf_cached() -> dict[str, float]:
         yf_to_canonical = {v: k for k, v in YFINANCE_MAP.items() if v is not None}
 
         try:
-            df = yf.download(yf_symbols, period="1d", progress=False, threads=True)
+            df = _yf_download_with_timeout(yf_symbols, period="1d")
+        except TimeoutError as e:
+            log.error(f"yFinance cache refresh timed out: {e}")
+            return _yf_cache or {}
         except Exception as e:
             log.error(f"yFinance batch download failed: {e}")
             return _yf_cache or {}
@@ -336,14 +386,18 @@ def _fetch_yf_cached() -> dict[str, float]:
                 try:
                     close_series = df["Close"][sym].dropna()
                     if not close_series.empty:
-                        prices[yf_to_canonical[sym]] = float(close_series.iloc[-1])
+                        val = float(close_series.iloc[-1])
+                        if math.isfinite(val) and val > 0:
+                            prices[yf_to_canonical[sym]] = val
                 except (KeyError, IndexError):
                     pass
         else:
             # Single ticker
             close_series = df["Close"].dropna()
             if not close_series.empty and len(yf_symbols) == 1:
-                prices[yf_to_canonical[yf_symbols[0]]] = float(close_series.iloc[-1])
+                val = float(close_series.iloc[-1])
+                if math.isfinite(val) and val > 0:
+                    prices[yf_to_canonical[yf_symbols[0]]] = val
 
         if prices:
             _yf_cache = prices

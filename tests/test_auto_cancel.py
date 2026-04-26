@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 import pytest
 
-from tests.conftest import make_test_db, seed_current_state, seed_price_history
+from conftest import make_test_db, seed_current_state, seed_price_history
 
 
 def _count_emails(conn) -> int:

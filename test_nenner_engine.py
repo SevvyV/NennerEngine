@@ -1712,6 +1712,69 @@ class TestStanleyBriefGeneration(unittest.TestCase):
     @patch("nenner_engine.postmaster.send_email")
     @patch("nenner_engine.stanley._call_stanley_llm")
     @patch("nenner_engine.llm_parser._get_cached_api_key")
+    def test_brief_resends_when_prior_send_failed(self, mock_key, mock_llm, mock_send):
+        """If an earlier brief was stored but the email send failed (sent_at NULL),
+        a subsequent run must reuse the stored text and retry delivery instead of
+        either silently skipping or trying to INSERT a duplicate row that the
+        UNIQUE(email_id) index would reject."""
+        mock_key.return_value = "test-key"
+        mock_llm.return_value = "<b>Original brief</b>"
+
+        # Seed an email row so we have a valid email_id to dedup against.
+        cur = self.conn.execute(
+            "INSERT INTO emails (message_id, subject, date_sent, date_parsed, "
+            "email_type, raw_text) VALUES (?, ?, ?, ?, ?, ?)",
+            ("msg-1", "Test", "2026-04-26", "2026-04-26",
+             "stocks_update", "Gold update"),
+        )
+        email_id = cur.lastrowid
+        self.conn.commit()
+
+        # First run: SMTP "fails" (returns False), so sent_at stays NULL.
+        mock_send.return_value = False
+        generate_morning_brief(
+            conn=self.conn, raw_email_text="Gold update",
+            parsed_signals={"signals": [], "cycles": [], "price_targets": []},
+            changes=[], db_path=":memory:", email_id=email_id,
+        )
+        self.assertEqual(mock_llm.call_count, 1)
+        row = self.conn.execute(
+            "SELECT brief_text, sent_at FROM stanley_briefs WHERE email_id = ?",
+            (email_id,),
+        ).fetchone()
+        self.assertIsNotNone(row)
+        self.assertEqual(row["brief_text"], "<b>Original brief</b>")
+        self.assertIsNone(row["sent_at"])
+
+        # Second run: SMTP succeeds. We must NOT re-call the LLM (the stored
+        # text is reused) and sent_at MUST be set.
+        mock_send.return_value = True
+        generate_morning_brief(
+            conn=self.conn, raw_email_text="Gold update",
+            parsed_signals={"signals": [], "cycles": [], "price_targets": []},
+            changes=[], db_path=":memory:", email_id=email_id,
+        )
+        self.assertEqual(mock_llm.call_count, 1, "LLM should not be called again")
+        row = self.conn.execute(
+            "SELECT brief_text, sent_at FROM stanley_briefs WHERE email_id = ?",
+            (email_id,),
+        ).fetchone()
+        self.assertEqual(row["brief_text"], "<b>Original brief</b>")
+        self.assertIsNotNone(row["sent_at"], "sent_at must be set after success")
+
+        # Third run: already sent, must short-circuit (no LLM, no SMTP).
+        mock_send.reset_mock()
+        generate_morning_brief(
+            conn=self.conn, raw_email_text="Gold update",
+            parsed_signals={"signals": [], "cycles": [], "price_targets": []},
+            changes=[], db_path=":memory:", email_id=email_id,
+        )
+        self.assertEqual(mock_llm.call_count, 1)
+        mock_send.assert_not_called()
+
+    @patch("nenner_engine.postmaster.send_email")
+    @patch("nenner_engine.stanley._call_stanley_llm")
+    @patch("nenner_engine.llm_parser._get_cached_api_key")
     def test_brief_with_changes(self, mock_key, mock_llm, _mock_send):
         """Brief with direction changes includes them in LLM context."""
         mock_key.return_value = "test-key"

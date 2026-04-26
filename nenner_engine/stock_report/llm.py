@@ -6,6 +6,7 @@ so the report still ships without commentary.
 """
 
 import logging
+import random
 import time
 
 from ..config import LLM_MODEL, LLM_MAX_TOKENS_REPORT, LLM_RETRY_ATTEMPTS
@@ -126,9 +127,12 @@ def _generate_stanley_take(stocks_data: list[dict], api_key: str) -> str:
         except Exception as e:
             last_error = e
             if attempt < LLM_RETRY_ATTEMPTS:
-                wait = 2 ** (attempt + 1)
+                # Add jitter so concurrent retries don't lockstep into the
+                # next failure window.
+                base = 2 ** (attempt + 1)
+                wait = base + random.uniform(0, base / 2)
                 log.warning(f"Stock report LLM error (attempt {attempt + 1}), "
-                            f"retrying in {wait}s: {e}")
+                            f"retrying in {wait:.1f}s: {e}")
                 time.sleep(wait)
 
     log.error(f"Stock report LLM failed after {LLM_RETRY_ATTEMPTS + 1} attempts: {last_error}")
