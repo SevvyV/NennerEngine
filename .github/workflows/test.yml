@@ -26,12 +26,16 @@ jobs:
           # Install only what tests actually need. Skipping the heavy
           # transitive deps (xlwings is Windows-only via COM, dash/uvicorn
           # not exercised by unit tests) keeps CI fast and Linux-friendly.
+          # scipy: test_fischer_engine.py uses scipy.stats.norm.
+          # httpx: fastapi's TestClient needs it.
           pip install \
             "anthropic>=0.83.0,<1.0" \
             "fastapi>=0.135.2,<1.0" \
+            "httpx" \
             "yfinance>=1.2.0,<2.0" \
             "pandas>=3.0.1,<4.0" \
             "numpy>=2.4.2,<3.0" \
+            "scipy" \
             "requests>=2.32.5,<3.0" \
             "tzdata>=2025.3" \
             "pytest>=9.0,<10.0" \
